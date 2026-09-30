@@ -1,0 +1,835 @@
+# ═══════════════════════════════════════════════════════════════
+# SOTA Superset Runtime — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Target: unified representation for modern agents (AutoGPT-classic,
+# platform workflows, LangGraph/Agents-SDK style handoffs + guardrails).
+
+name: "SOTA Superset Runtime"
+version: "0.1"
+description: "Unified schema for modern agent systems: typed actions, external calls, guardrails, verification, checkpointing, tracing, and handoffs"
+entry_point: receive_request
+
+entities:
+  - id: orchestrator
+    type: agent
+    label: "Orchestrator"
+    model: gpt-5
+    system_prompt: "Coordinate execution across planning, action routing, external capabilities, and quality gates."
+    input_schema: AgentInput
+    output_schema: ActionDecision
+
+  - id: planner
+    type: agent
+    label: "Planner"
+    model: gpt-5-mini
+    system_prompt: "Generate executable plans and acceptance checks."
+    input_schema: PlanInput
+    output_schema: PlanState
+
+  - id: reasoner
+    type: agent
+    label: "Reasoner"
+    model: gpt-5-mini
+    system_prompt: "Decide next action type and payload from context and observations."
+    input_schema: AgentInput
+    output_schema: ActionDecision
+
+  - id: critic
+    type: agent
+    label: "Critic"
+    model: gpt-5-mini
+    system_prompt: "Review candidate actions for risk, regressions, and policy mismatch."
+    input_schema: CriticInput
+    output_schema: CriticResult
+
+  - id: evaluator
+    type: agent
+    label: "Evaluator"
+    model: gpt-5-mini
+    system_prompt: "Verify outcomes against acceptance criteria and runtime constraints."
+    input_schema: VerifyInput
+    output_schema: VerificationResult
+
+  - id: synthesizer
+    type: agent
+    label: "Synthesizer"
+    model: gpt-5
+    system_prompt: "Produce final response with outcomes, evidence, and limitations."
+    input_schema: SynthesisInput
+    output_schema: FinalMessage
+
+  - id: tool_router
+    type: agent
+    label: "Tool Router"
+    model: gpt-5-mini
+    system_prompt: "Map typed action intent to concrete tool invocations."
+    input_schema: ActionDecision
+    output_schema: ToolCallBatch
+
+  - id: agent_team
+    type: team
+    label: "Agent Team"
+    members: [orchestrator, planner, reasoner, critic, evaluator, synthesizer, tool_router]
+    strategy: adaptive
+
+  - id: user
+    type: human
+    label: "User"
+    role: operator
+
+  - id: conversation_thread
+    type: conversation
+    label: "Thread Context"
+    schema: ConversationTurn
+
+  - id: environment_model
+    type: world_model
+    label: "Environment Model"
+    model_type: "dynamic"
+    confidence: "estimated"
+
+  - id: conversation_memory
+    type: store
+    label: "Conversation Memory"
+    store_type: kv
+    schema: ConversationTurn
+    retention: session
+
+  - id: working_memory
+    type: store
+    label: "Working Memory"
+    store_type: kv
+    schema: ContextBundle
+    retention: session
+
+  - id: long_term_memory
+    type: store
+    label: "Long-Term Memory"
+    store_type: vector
+    schema: MemoryEntry
+    retention: persistent
+
+  - id: artifact_store
+    type: store
+    label: "Artifact Store"
+    store_type: file
+    schema: WorkspaceArtifact
+    retention: persistent
+
+  - id: checkpoint_store
+    type: store
+    label: "Checkpoint Store"
+    store_type: kv
+    schema: CheckpointRecord
+    retention: persistent
+
+  - id: trace_store
+    type: store
+    label: "Trace Store"
+    store_type: file
+    schema: TraceSpan
+    retention: session
+
+  - id: instruction_store
+    type: store
+    label: "Instruction Store"
+    store_type: file
+    schema: InstructionBundle
+    retention: session
+
+  - id: policy_store
+    type: store
+    label: "Policy Store"
+    store_type: kv
+    schema: PolicyProfile
+    retention: session
+
+  - id: shell_tool
+    type: tool
+    label: "Shell Tool"
+    tool_type: shell
+    input_schema: ShellCommand
+    output_schema: ShellResult
+    side_effects: ["filesystem", "processes", "network"]
+
+  - id: filesystem_tool
+    type: tool
+    label: "Filesystem Tool"
+    tool_type: mcp
+    input_schema: FileOpInput
+    output_schema: FileOpOutput
+    side_effects: ["filesystem"]
+
+  - id: web_tool
+    type: tool
+    label: "Web Tool"
+    tool_type: api
+    input_schema: ExternalCallRequest
+    output_schema: ExternalCallResult
+    side_effects: ["network"]
+
+  - id: mcp_tool
+    type: tool
+    label: "MCP Tool"
+    tool_type: mcp
+    input_schema: ExternalCallRequest
+    output_schema: ExternalCallResult
+    side_effects: ["network", "filesystem"]
+
+  - id: rpc_tool
+    type: tool
+    label: "RPC Tool"
+    tool_type: api
+    input_schema: ExternalCallRequest
+    output_schema: ExternalCallResult
+    side_effects: ["network", "state"]
+
+  - id: commentary_channel
+    type: channel
+    label: "Progress Channel"
+    channel_type: topic
+    message_schema: ProgressMessage
+    retention: last
+    reducer: replace
+
+  - id: final_channel
+    type: channel
+    label: "Final Channel"
+    channel_type: request_reply
+    message_schema: FinalMessage
+    retention: last
+    reducer: replace
+
+  - id: telemetry_channel
+    type: channel
+    label: "Telemetry Channel"
+    channel_type: stream
+    message_schema: TraceSpan
+    retention: session
+
+  - id: runtime_permissions
+    type: config
+    label: "Runtime Permissions"
+    values:
+      sandbox_mode: "configurable"
+      network_access: true
+      approval_policy: "configurable"
+
+  - id: capability_profile_config
+    type: config
+    label: "Capability Profile"
+    values:
+      profile: "restricted"
+      allowed_profiles: ["restricted", "external_enabled"]
+
+  - id: guardrail_profile_config
+    type: config
+    label: "Guardrail Profile"
+    values:
+      input_guardrails: true
+      output_guardrails: true
+      tool_guardrails: true
+
+  - id: model_router_config
+    type: config
+    label: "Model Router"
+    values:
+      planner_model: "gpt-5-mini"
+      reasoner_model: "gpt-5-mini"
+      synthesizer_model: "gpt-5"
+
+processes:
+  - id: receive_request
+    type: step
+    label: "Receive Request"
+    description: "Normalize inbound request and initialize thread state"
+    data_out: UserRequest
+    logic: |
+      import uuid
+      _text = state.data.get("text", "")
+      if not isinstance(_text, str):
+          _text = str(_text)
+      state.data["text"] = _text
+      state.data["objective"] = state.data.get("objective", _text)
+      state.data["thread_id"] = state.data.get("thread_id", f"thread_{uuid.uuid4().hex[:8]}")
+      state.data["requested_mode"] = state.data.get("requested_mode", "default")
+      state.data["capability_profile"] = state.data.get("capability_profile", "restricted")
+
+  - id: hydrate_context
+    type: step
+    label: "Hydrate Context"
+    description: "Load instructions, memory, policy profile, and prior artifacts"
+    data_in: UserRequest
+    data_out: ContextBundle
+
+  - id: apply_inbound_guardrails
+    type: policy
+    label: "Apply Inbound Guardrails"
+    targets: [build_plan, select_next_action, run_external_call]
+    effect: modify
+    rules:
+      - "Normalize/validate request fields and constraints"
+      - "Reject unsupported action types before tool dispatch"
+      - "Use capability profile to gate external operations"
+    enforcement: strict
+
+  - id: restore_checkpoint
+    type: step
+    label: "Restore Checkpoint"
+    description: "Resume from existing thread checkpoint when available"
+    data_out: CheckpointRecord
+    logic: |
+      state.data["checkpoint_response"] = state.data.get("checkpoint_response", "restore")
+
+  - id: load_checkpoint_state
+    type: step
+    label: "Load Checkpoint State"
+    description: "Load checkpoint payload from checkpoint store"
+    data_out: CheckpointRecord
+
+  - id: planning_gate
+    type: gate
+    label: "Need Plan?"
+    condition: "missing plan or user requested planning"
+    branches:
+      - condition: "plan needed"
+        target: build_plan
+      - condition: "plan ready"
+        target: select_next_action
+
+  - id: build_plan
+    type: step
+    label: "Build Plan"
+    description: "Construct/refresh executable plan and acceptance criteria"
+    data_in: PlanInput
+    data_out: PlanState
+
+  - id: select_next_action
+    type: step
+    label: "Select Next Action"
+    description: "Choose typed next action: tool_calls/external_call/respond/handoff/checkpoint"
+    data_in: AgentInput
+    data_out: ActionDecision
+
+  - id: action_gate
+    type: gate
+    label: "Route Action Type"
+    condition: "action_type"
+    branches:
+      - condition: "tool_calls"
+        target: run_tool_calls
+      - condition: "external_call"
+        target: run_external_call
+      - condition: "handoff"
+        target: run_handoff
+      - condition: "checkpoint"
+        target: save_checkpoint
+      - condition: "respond"
+        target: finalize_response
+
+  - id: run_tool_calls
+    type: step
+    label: "Run Tool Calls"
+    description: "Execute local/system tools based on typed calls"
+    data_in: ToolCallBatch
+    data_out: ToolResultBatch
+
+  - id: run_external_call
+    type: step
+    label: "Run External Call"
+    description: "Dispatch typed external interface call through adapter layer"
+    data_in: ExternalCallRequest
+    data_out: ExternalCallResult
+
+  - id: run_handoff
+    type: spawn
+    label: "Run Handoff"
+    description: "Handoff to teammate/sub-agent for delegated work"
+    template: reasoner
+    cardinality: dynamic
+    determined_by: select_next_action
+    aggregation: collect
+    recursive: false
+    data_in: HandoffPayload
+    data_out: ToolResultBatch
+
+  - id: handoff_protocol
+    type: protocol
+    label: "Handoff Protocol"
+    description: "Define handoff contract: context package + expected return type"
+    participants:
+      - entity: orchestrator
+        role: delegator
+      - entity: reasoner
+        role: delegate
+    termination: "delegate returns ToolResultBatch"
+    max_rounds: 2
+    rules:
+      - "Delegator sends objective, constraints, and current evidence."
+      - "Delegate returns structured result with confidence and blockers."
+      - "If blockers are unresolved, delegate requests clarification."
+    logic: |
+      state.data["handoff_contract"] = {
+          "required": ["objective", "constraints", "current_state"],
+          "return_schema": "ToolResultBatch",
+      }
+
+  - id: apply_outbound_guardrails
+    type: policy
+    label: "Apply Outbound Guardrails"
+    targets: [observe, verify_outcome, finalize_response]
+    effect: modify
+    rules:
+      - "Scrub sensitive outputs before publishing"
+      - "Enforce response schema and channel policy"
+      - "Attach evidence references when available"
+    enforcement: strict
+
+  - id: observe
+    type: step
+    label: "Observe Outcomes"
+    description: "Normalize outputs/events and update working state"
+    data_out: Observation
+
+  - id: verify_outcome
+    type: step
+    label: "Verify Outcome"
+    description: "Run acceptance/quality checks against objective"
+    data_in: VerifyInput
+    data_out: VerificationResult
+    logic: |
+      _verification = state.data.get("verification", {})
+      if not isinstance(_verification, dict):
+          _verification = {}
+      state.data["verification"] = {
+          "pass": bool(_verification.get("pass", False)),
+          "checks": _verification.get("checks", []),
+          "failures": _verification.get("failures", []),
+      }
+
+  - id: quality_gate
+    type: gate
+    label: "Quality Met?"
+    condition: "verification.pass == true"
+    branches:
+      - condition: "failed checks"
+        target: critic_review
+      - condition: "checks passed"
+        target: save_checkpoint
+
+  - id: critic_review
+    type: step
+    label: "Critic Review"
+    description: "Review failed checks and propose correction strategy"
+    data_in: CriticInput
+    data_out: CriticResult
+
+  - id: retry_or_continue
+    type: gate
+    label: "Retry Or Continue?"
+    condition: "critic.approved == true"
+    branches:
+      - condition: "retry"
+        target: select_next_action
+      - condition: "escalate error"
+        target: handle_error
+
+  - id: save_checkpoint
+    type: step
+    label: "Save Checkpoint"
+    description: "Persist resumable runtime state"
+    data_in: CheckpointRecord
+    logic: |
+      state.data["checkpoint_response"] = state.data.get("checkpoint_response", "save")
+
+  - id: persist_checkpoint_state
+    type: step
+    label: "Persist Checkpoint State"
+    description: "Write checkpoint payload to checkpoint store"
+    data_in: CheckpointRecord
+
+  - id: completion_gate
+    type: gate
+    label: "Objective Complete?"
+    condition: "objective satisfied and no pending blockers"
+    branches:
+      - condition: "work remains"
+        target: publish_progress
+      - condition: "done"
+        target: finalize_response
+
+  - id: publish_progress
+    type: step
+    label: "Publish Progress"
+    description: "Emit concise progress update to commentary channel"
+    data_out: ProgressMessage
+    logic: |
+      state.data["progress_summary"] = state.data.get("progress_summary", "Working on next task step.")
+
+  - id: emit_progress
+    type: step
+    label: "Emit Progress"
+    description: "Deliver progress update to user channel"
+    data_in: ProgressMessage
+    logic: |
+      state.data["last_channel"] = "commentary"
+
+  - id: finalize_response
+    type: step
+    label: "Finalize Response"
+    description: "Compose final user response from verified state"
+    data_in: SynthesisInput
+    data_out: FinalMessage
+    logic: |
+      if not state.data.get("final_draft"):
+          state.data["final_draft"] = state.data.get("response_draft", "")
+
+  - id: emit_final
+    type: step
+    label: "Emit Final"
+    description: "Deliver final answer to user"
+    data_in: FinalMessage
+    logic: |
+      state.data["last_channel"] = "final"
+      state.data["_done"] = True
+
+  - id: persist_turn
+    type: step
+    label: "Persist Turn"
+    description: "Persist user/assistant/tool events and telemetry"
+
+  - id: handle_error
+    type: error_handler
+    label: "Runtime Error Handler"
+    scope:
+      - run_tool_calls
+      - run_external_call
+      - finalize_response
+    on_error: error_recovery
+    retry:
+      max_retries: 2
+      backoff: exponential
+      initial_delay_ms: 1000
+      max_delay_ms: 8000
+      retryable_errors: [rate_limit, timeout, transient_network]
+    fallback: publish_progress
+
+  - id: error_recovery
+    type: step
+    label: "Error Recovery"
+    description: "Capture errors, add context, and continue safely"
+    logic: |
+      _err = state.data.get("error_message", "Unknown error")
+      state.data["last_error"] = str(_err)
+      state.data["progress_summary"] = f"Recovering from error: {str(_err)[:120]}"
+
+edges:
+  - { type: flow, from: user, to: receive_request, label: "user input", data: UserRequest }
+  - { type: flow, from: receive_request, to: hydrate_context, label: "initialize context" }
+  - { type: flow, from: hydrate_context, to: apply_inbound_guardrails, label: "guard inbound" }
+  - { type: flow, from: apply_inbound_guardrails, to: restore_checkpoint, label: "resume state" }
+  - { type: flow, from: restore_checkpoint, to: load_checkpoint_state, label: "restore selection complete" }
+  - { type: flow, from: load_checkpoint_state, to: planning_gate, label: "plan decision" }
+  - { type: branch, from: planning_gate, to: build_plan, condition: "plan needed", label: "build plan" }
+  - { type: branch, from: planning_gate, to: select_next_action, condition: "plan ready", label: "skip planning" }
+  - { type: invoke, from: build_plan, to: planner, label: "plan objective", input: PlanInput, output: PlanState }
+  - { type: flow, from: build_plan, to: select_next_action, label: "plan ready" }
+  - { type: invoke, from: select_next_action, to: reasoner, label: "decide action", input: AgentInput, output: ActionDecision }
+  - { type: flow, from: select_next_action, to: action_gate, label: "route action" }
+  - { type: branch, from: action_gate, to: run_tool_calls, condition: "tool_calls", label: "local tools" }
+  - { type: branch, from: action_gate, to: run_external_call, condition: "external_call", label: "external interface" }
+  - { type: branch, from: action_gate, to: run_handoff, condition: "handoff", label: "delegate" }
+  - { type: branch, from: action_gate, to: save_checkpoint, condition: "checkpoint", label: "checkpoint now" }
+  - { type: branch, from: action_gate, to: finalize_response, condition: "respond", label: "compose response" }
+  - { type: invoke, from: run_tool_calls, to: tool_router, label: "select concrete tools", input: ActionDecision, output: ToolCallBatch }
+  - { type: invoke, from: run_tool_calls, to: shell_tool, label: "shell execution", input: ShellCommand, output: ShellResult }
+  - { type: invoke, from: run_tool_calls, to: filesystem_tool, label: "file operations", input: FileOpInput, output: FileOpOutput }
+  - { type: invoke, from: run_external_call, to: web_tool, label: "search/retrieval", input: ExternalCallRequest, output: ExternalCallResult }
+  - { type: invoke, from: run_external_call, to: mcp_tool, label: "mcp dispatch", input: ExternalCallRequest, output: ExternalCallResult }
+  - { type: invoke, from: run_external_call, to: rpc_tool, label: "rpc dispatch", input: ExternalCallRequest, output: ExternalCallResult }
+  - { type: flow, from: run_handoff, to: handoff_protocol, label: "validate handoff contract" }
+  - { type: handoff, from: orchestrator, to: reasoner, label: "delegate to peer", data: HandoffPayload }
+  - { type: flow, from: handoff_protocol, to: apply_outbound_guardrails, label: "handoff result available" }
+  - { type: flow, from: run_tool_calls, to: apply_outbound_guardrails, label: "guard tool output" }
+  - { type: flow, from: run_external_call, to: apply_outbound_guardrails, label: "guard external output" }
+  - { type: flow, from: run_handoff, to: apply_outbound_guardrails, label: "guard delegated output" }
+  - { type: flow, from: apply_outbound_guardrails, to: observe, label: "normalize observations" }
+  - { type: observe, from: observe, to: environment_model, label: "update world model", data: Observation }
+  - { type: flow, from: observe, to: verify_outcome, label: "quality checks" }
+  - { type: verify, from: verify_outcome, to: evaluator, label: "evaluate acceptance", input: VerifyInput, output: VerificationResult }
+  - { type: flow, from: verify_outcome, to: quality_gate, label: "gate on verification" }
+  - { type: branch, from: quality_gate, to: critic_review, condition: "failed checks", label: "critic loop" }
+  - { type: branch, from: quality_gate, to: save_checkpoint, condition: "checks passed", label: "checkpoint good state" }
+  - { type: invoke, from: critic_review, to: critic, label: "critique corrections", input: CriticInput, output: CriticResult }
+  - { type: flow, from: critic_review, to: retry_or_continue, label: "decide retry" }
+  - { type: branch, from: retry_or_continue, to: select_next_action, condition: "retry", label: "iterate" }
+  - { type: branch, from: retry_or_continue, to: handle_error, condition: "escalate error", label: "error path" }
+  - { type: flow, from: save_checkpoint, to: persist_checkpoint_state, label: "checkpoint decision complete" }
+  - { type: flow, from: persist_checkpoint_state, to: completion_gate, label: "progress check" }
+  - { type: branch, from: completion_gate, to: publish_progress, condition: "work remains", label: "update user" }
+  - { type: branch, from: completion_gate, to: finalize_response, condition: "done", label: "finish" }
+  - { type: flow, from: publish_progress, to: emit_progress, label: "emit update" }
+  - { type: publish, from: publish_progress, to: commentary_channel, label: "progress event", data: ProgressMessage }
+  - { type: subscribe, from: commentary_channel, to: emit_progress, label: "deliver progress", data: ProgressMessage }
+  - { type: flow, from: emit_progress, to: select_next_action, label: "continue loop" }
+  - { type: invoke, from: finalize_response, to: synthesizer, label: "compose final", input: SynthesisInput, output: FinalMessage }
+  - { type: flow, from: finalize_response, to: emit_final, label: "emit final response" }
+  - { type: publish, from: finalize_response, to: final_channel, label: "final payload", data: FinalMessage }
+  - { type: subscribe, from: final_channel, to: emit_final, label: "deliver final", data: FinalMessage }
+  - { type: flow, from: emit_final, to: persist_turn, label: "persist" }
+  - { type: write, from: persist_turn, to: conversation_memory, label: "append turn", data: ConversationTurn }
+  - { type: write, from: observe, to: working_memory, label: "update working set", data: ContextBundle }
+  - { type: write, from: observe, to: long_term_memory, label: "persist memory", data: MemoryEntry }
+  - { type: write, from: observe, to: artifact_store, label: "record artifacts", data: WorkspaceArtifact }
+  - { type: write, from: observe, to: trace_store, label: "record trace span", data: TraceSpan }
+  - { type: write, from: persist_checkpoint_state, to: checkpoint_store, label: "save snapshot", data: CheckpointRecord }
+  - { type: read, from: load_checkpoint_state, to: checkpoint_store, label: "load snapshot", data: CheckpointRecord }
+  - { type: read, from: hydrate_context, to: instruction_store, label: "load instructions", data: InstructionBundle }
+  - { type: read, from: hydrate_context, to: conversation_memory, label: "load thread", data: ConversationTurn }
+  - { type: read, from: hydrate_context, to: working_memory, label: "load working set", data: ContextBundle }
+  - { type: read, from: hydrate_context, to: policy_store, label: "load policies", data: PolicyProfile }
+  - { type: observe, from: hydrate_context, to: conversation_thread, label: "bind thread view", data: ConversationTurn }
+  - { type: publish, from: observe, to: telemetry_channel, label: "telemetry stream", data: TraceSpan }
+  - { type: flow, from: agent_team, to: handoff_protocol, label: "team routing profile" }
+  - { type: modify, from: runtime_permissions, to: run_tool_calls, label: "permission envelope", effect: "tool/runtime limits" }
+  - { type: modify, from: capability_profile_config, to: run_external_call, label: "capability gating", effect: "restricted vs external_enabled" }
+  - { type: modify, from: guardrail_profile_config, to: apply_inbound_guardrails, label: "guardrail tuning", effect: "input/output/tool policies" }
+  - { type: modify, from: model_router_config, to: orchestrator, label: "model routing policy", effect: "role-specific model selection" }
+  - { type: error, from: run_tool_calls, to: handle_error, label: "tool runtime error" }
+  - { type: error, from: run_external_call, to: handle_error, label: "external call error" }
+  - { type: error, from: finalize_response, to: handle_error, label: "response assembly error" }
+  - { type: flow, from: handle_error, to: error_recovery, label: "route to recovery" }
+  - { type: flow, from: error_recovery, to: publish_progress, label: "report recovery status" }
+  - { type: loop, from: persist_turn, to: receive_request, label: "next turn", condition: "always" }
+
+schemas:
+  - name: UserRequest
+    description: "Inbound user request and mode constraints"
+    fields:
+      - { name: text, type: string }
+      - { name: files, type: "list<string>", optional: true }
+      - { name: constraints, type: "list<string>", optional: true }
+      - { name: requested_mode, type: "enum[default, plan]", optional: true }
+      - { name: capability_profile, type: "enum[restricted, external_enabled]", optional: true }
+
+  - name: PlanInput
+    description: "Planner input payload"
+    fields:
+      - { name: objective, type: string }
+      - { name: constraints, type: "list<string>", optional: true }
+
+  - name: PlanState
+    description: "Current plan + progress markers"
+    fields:
+      - { name: plan, type: "list<string>" }
+      - { name: current_step_idx, type: integer }
+      - { name: total_steps, type: integer }
+      - { name: acceptance_criteria, type: "list<string>", optional: true }
+
+  - name: ContextBundle
+    description: "Loaded runtime context"
+    fields:
+      - { name: thread_id, type: string }
+      - { name: objective, type: string }
+      - { name: plan_state, type: PlanState, optional: true }
+      - { name: memories, type: "list<MemoryEntry>", optional: true }
+      - { name: policy_profile, type: PolicyProfile, optional: true }
+
+  - name: AgentInput
+    description: "Action-selection input"
+    fields:
+      - { name: context, type: ContextBundle }
+      - { name: objective, type: string }
+      - { name: acceptance_criteria, type: "list<string>", optional: true }
+
+  - name: ActionDecision
+    description: "Typed action choice"
+    fields:
+      - { name: action_type, type: "enum[tool_calls, external_call, respond, handoff, checkpoint]" }
+      - { name: tool_calls, type: "list<ToolCall>", optional: true }
+      - { name: external_call, type: ExternalCallRequest, optional: true }
+      - { name: response_draft, type: string, optional: true }
+      - { name: handoff, type: HandoffPayload, optional: true }
+      - { name: done, type: boolean, optional: true }
+
+  - name: ToolCall
+    description: "Single tool call"
+    fields:
+      - { name: tool_name, type: string }
+      - { name: arguments, type: object }
+
+  - name: ToolCallBatch
+    description: "Batch of tool calls"
+    fields:
+      - { name: calls, type: "list<ToolCall>" }
+
+  - name: ToolResult
+    description: "Result for one tool call"
+    fields:
+      - { name: tool_name, type: string }
+      - { name: success, type: boolean }
+      - { name: output, type: string, optional: true }
+      - { name: error, type: string, optional: true }
+
+  - name: ToolResultBatch
+    description: "Aggregated tool results"
+    fields:
+      - { name: results, type: "list<ToolResult>" }
+
+  - name: ExternalCallRequest
+    description: "Typed external capability request"
+    fields:
+      - { name: interface_name, type: "enum[semantic_search, mcp_call, rpc_emit, web_fetch]" }
+      - { name: payload, type: object }
+      - { name: trace_id, type: string, optional: true }
+
+  - name: ExternalCallResult
+    description: "Typed external capability result"
+    fields:
+      - { name: handled, type: boolean }
+      - { name: ok, type: boolean }
+      - { name: provider, type: string, optional: true }
+      - { name: mode, type: "enum[deterministic, live, llm_mock]", optional: true }
+      - { name: text, type: string, optional: true }
+      - { name: data, type: object, optional: true }
+      - { name: error, type: string, optional: true }
+
+  - name: HandoffPayload
+    description: "Delegation payload for sub-agent/team handoff"
+    fields:
+      - { name: target, type: string }
+      - { name: objective, type: string }
+      - { name: context, type: object }
+
+  - name: VerifyInput
+    description: "Verification inputs"
+    fields:
+      - { name: objective, type: string }
+      - { name: acceptance_criteria, type: "list<string>", optional: true }
+      - { name: evidence, type: object, optional: true }
+
+  - name: VerificationResult
+    description: "Verification outcome"
+    fields:
+      - { name: pass, type: boolean }
+      - { name: checks, type: "list<string>", optional: true }
+      - { name: failures, type: "list<string>", optional: true }
+
+  - name: CriticInput
+    description: "Critic review payload"
+    fields:
+      - { name: objective, type: string }
+      - { name: decision, type: ActionDecision }
+      - { name: verification, type: VerificationResult, optional: true }
+
+  - name: CriticResult
+    description: "Critic decision"
+    fields:
+      - { name: approved, type: boolean }
+      - { name: rationale, type: string, optional: true }
+      - { name: improvements, type: string, optional: true }
+
+  - name: SynthesisInput
+    description: "Input to final synthesis"
+    fields:
+      - { name: objective, type: string }
+      - { name: outcomes, type: object, optional: true }
+      - { name: verification, type: VerificationResult, optional: true }
+      - { name: artifacts, type: "list<string>", optional: true }
+
+  - name: ProgressMessage
+    description: "Intermediary progress update"
+    fields:
+      - { name: summary, type: string }
+      - { name: current_step, type: string, optional: true }
+
+  - name: FinalMessage
+    description: "Final user-facing output"
+    fields:
+      - { name: answer, type: string }
+      - { name: verification_summary, type: string, optional: true }
+      - { name: changed_files, type: "list<string>", optional: true }
+
+  - name: ConversationTurn
+    description: "Stored event in conversation memory"
+    fields:
+      - { name: role, type: "enum[user, assistant, tool, system]" }
+      - { name: content, type: string }
+      - { name: timestamp, type: string, optional: true }
+
+  - name: MemoryEntry
+    description: "Vector memory entry"
+    fields:
+      - { name: text, type: string }
+      - { name: embedding, type: "list<float>", optional: true }
+      - { name: metadata, type: object, optional: true }
+
+  - name: WorkspaceArtifact
+    description: "Recorded artifact metadata"
+    fields:
+      - { name: path, type: string }
+      - { name: artifact_type, type: "enum[file, directory, diff, command_output]" }
+      - { name: content_excerpt, type: string, optional: true }
+
+  - name: CheckpointRecord
+    description: "Checkpointed runtime snapshot"
+    fields:
+      - { name: thread_id, type: string }
+      - { name: checkpoint_id, type: string }
+      - { name: state_data, type: object }
+      - { name: timestamp, type: string, optional: true }
+
+  - name: TraceSpan
+    description: "Unified observability span"
+    fields:
+      - { name: span_type, type: "enum[process, llm_call, tool_call, guardrail, verification, handoff]" }
+      - { name: process_id, type: string, optional: true }
+      - { name: duration_ms, type: integer, optional: true }
+      - { name: payload, type: object, optional: true }
+
+  - name: InstructionBundle
+    description: "Instruction hierarchy and runtime constraints"
+    fields:
+      - { name: layers, type: "list<string>" }
+      - { name: permissions, type: object, optional: true }
+      - { name: style_constraints, type: "list<string>", optional: true }
+
+  - name: PolicyProfile
+    description: "Policy knobs for capability + guardrail behavior"
+    fields:
+      - { name: capability_profile, type: "enum[restricted, external_enabled]" }
+      - { name: input_guardrails, type: boolean }
+      - { name: output_guardrails, type: boolean }
+      - { name: tool_guardrails, type: boolean }
+
+  - name: Observation
+    description: "Normalized outcome observation"
+    fields:
+      - { name: summary, type: string }
+      - { name: raw, type: object, optional: true }
+
+  - name: ShellCommand
+    description: "Shell command request"
+    fields:
+      - { name: cmd, type: string }
+      - { name: workdir, type: string, optional: true }
+
+  - name: ShellResult
+    description: "Shell command result"
+    fields:
+      - { name: success, type: boolean }
+      - { name: stdout, type: string, optional: true }
+      - { name: stderr, type: string, optional: true }
+
+  - name: FileOpInput
+    description: "Filesystem operation request"
+    fields:
+      - { name: operation, type: string }
+      - { name: path, type: string, optional: true }
+      - { name: payload, type: object, optional: true }
+
+  - name: FileOpOutput
+    description: "Filesystem operation result"
+    fields:
+      - { name: success, type: boolean }
+      - { name: result, type: object, optional: true }

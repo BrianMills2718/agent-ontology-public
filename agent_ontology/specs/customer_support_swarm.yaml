@@ -1,0 +1,244 @@
+# ═══════════════════════════════════════════════════════════════
+# Customer Support Swarm — OpenAI Swarm-style agent handoff
+# ═══════════════════════════════════════════════════════════════
+# Demonstrates: handoff edges, conversation entity, team entity
+#
+# A triage agent receives customer requests and hands off to
+# specialist agents (billing, tech support, account) based on
+# the user's intent. Each specialist can hand back to triage
+# if the request is outside their scope.
+#
+# Pattern: Agent handoff (OpenAI Agents SDK / Swarm)
+# ═══════════════════════════════════════════════════════════════
+
+name: "Customer Support Swarm"
+version: "1.0"
+description: "Multi-agent customer support with peer-to-peer handoffs"
+entry_point: intake
+
+entities:
+  # ── Agents ──
+  - id: triage_agent
+    type: agent
+    label: "Triage Agent"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a customer support triage agent. Analyze the customer's
+      request and determine which specialist to route to. Classify the
+      intent as: billing, technical, account, or general.
+    output_schema: TriageResult
+
+  - id: billing_agent
+    type: agent
+    label: "Billing Agent"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a billing specialist. Help customers with invoices,
+      payments, refunds, and subscription changes. If the request
+      is outside your scope, indicate a handoff back to triage.
+    output_schema: SupportResponse
+
+  - id: tech_support_agent
+    type: agent
+    label: "Tech Support Agent"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a technical support specialist. Help customers with
+      product issues, bugs, setup, and troubleshooting. If the request
+      is outside your scope, indicate a handoff back to triage.
+    output_schema: SupportResponse
+
+  - id: account_agent
+    type: agent
+    label: "Account Agent"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are an account management specialist. Help customers with
+      profile updates, password resets, and account settings. If the
+      request is outside your scope, indicate a handoff back to triage.
+    output_schema: SupportResponse
+
+  # ── Team ──
+  - id: support_team
+    type: team
+    label: "Support Team"
+    members: [triage_agent, billing_agent, tech_support_agent, account_agent]
+    strategy: dynamic
+    delegation: true
+
+  # ── Conversation ──
+  - id: support_thread
+    type: conversation
+    label: "Support Thread"
+    participants: [triage_agent, billing_agent, tech_support_agent, account_agent]
+    history_schema: ConversationTurn
+    max_turns: 20
+    persistence: session
+
+  # ── Store ──
+  - id: ticket_store
+    type: store
+    label: "Ticket Store"
+    store_type: kv
+    schema: Ticket
+
+processes:
+  # ── Intake ──
+  - id: intake
+    type: step
+    label: "Receive Request"
+    logic: |
+      state.data["request"] = state.data.get("query", "")
+      state.data["conversation_history"] = []
+
+  # ── Triage ──
+  - id: triage
+    type: step
+    label: "Triage Request"
+    logic: |
+      pass
+
+  # ── Route ──
+  - id: route
+    type: gate
+    label: "Route to Specialist"
+    condition: "intent classification"
+    branches:
+      - condition: "intent == billing"
+        target: handle_billing
+      - condition: "intent == technical"
+        target: handle_tech
+      - condition: "intent == account"
+        target: handle_account
+    default: respond_general
+
+  # ── Specialist steps ──
+  - id: handle_billing
+    type: step
+    label: "Handle Billing"
+    logic: |
+      pass
+
+  - id: handle_tech
+    type: step
+    label: "Handle Tech Support"
+    logic: |
+      pass
+
+  - id: handle_account
+    type: step
+    label: "Handle Account"
+    logic: |
+      pass
+
+  - id: respond_general
+    type: step
+    label: "General Response"
+    logic: |
+      state.data["response"] = state.data.get("answer", "I'll help you with that.")
+
+  # ── Finalize ──
+  - id: finalize
+    type: step
+    label: "Save & Respond"
+    logic: |
+      state.data["_done"] = True
+
+edges:
+  # ── Flow spine ──
+  - { type: flow, from: intake, to: triage }
+  - { type: flow, from: triage, to: route }
+  - { type: flow, from: handle_billing, to: finalize }
+  - { type: flow, from: handle_tech, to: finalize }
+  - { type: flow, from: handle_account, to: finalize }
+  - { type: flow, from: respond_general, to: finalize }
+
+  # ── Branch edges (explicit) ──
+  - { type: branch, from: route, to: handle_billing, condition: "intent == billing" }
+  - { type: branch, from: route, to: handle_tech, condition: "intent == technical" }
+  - { type: branch, from: route, to: handle_account, condition: "intent == account" }
+
+  # ── Invoke agents ──
+  - { type: invoke, from: triage, to: triage_agent, output: TriageResult }
+  - { type: invoke, from: handle_billing, to: billing_agent, output: SupportResponse }
+  - { type: invoke, from: handle_tech, to: tech_support_agent, output: SupportResponse }
+  - { type: invoke, from: handle_account, to: account_agent, output: SupportResponse }
+
+  # ── Handoff edges (peer-to-peer) ──
+  - type: handoff
+    from: triage_agent
+    to: billing_agent
+    condition: "intent == billing"
+    context: full
+    label: "Route billing requests"
+
+  - type: handoff
+    from: triage_agent
+    to: tech_support_agent
+    condition: "intent == technical"
+    context: full
+    label: "Route tech requests"
+
+  - type: handoff
+    from: triage_agent
+    to: account_agent
+    condition: "intent == account"
+    context: full
+    label: "Route account requests"
+
+  - type: handoff
+    from: billing_agent
+    to: triage_agent
+    condition: "out_of_scope"
+    context: full
+    resumable: true
+    label: "Escalate back to triage"
+
+  - type: handoff
+    from: tech_support_agent
+    to: triage_agent
+    condition: "out_of_scope"
+    context: full
+    resumable: true
+    label: "Escalate back to triage"
+
+  - type: handoff
+    from: account_agent
+    to: triage_agent
+    condition: "out_of_scope"
+    context: full
+    resumable: true
+    label: "Escalate back to triage"
+
+  # ── Store access ──
+  - { type: write, from: finalize, to: ticket_store, label: "Save ticket" }
+
+schemas:
+  - name: TriageResult
+    fields:
+      - { name: intent, type: string, description: "billing | technical | account | general" }
+      - { name: confidence, type: float }
+      - { name: summary, type: string }
+
+  - name: SupportResponse
+    fields:
+      - { name: answer, type: string }
+      - { name: resolved, type: boolean }
+      - { name: handoff_needed, type: boolean }
+      - { name: handoff_reason, type: string }
+
+  - name: Ticket
+    fields:
+      - { name: id, type: string }
+      - { name: request, type: string }
+      - { name: intent, type: string }
+      - { name: response, type: string }
+      - { name: resolved, type: boolean }
+      - { name: agent_path, type: "list<string>" }
+
+  - name: ConversationTurn
+    fields:
+      - { name: speaker, type: string }
+      - { name: role, type: string }
+      - { name: content, type: string }
+      - { name: turn_number, type: integer }

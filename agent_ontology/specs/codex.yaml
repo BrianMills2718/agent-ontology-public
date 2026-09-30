@@ -1,0 +1,769 @@
+# ═══════════════════════════════════════════════════════════════
+# Codex — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# GPT-5-based coding agent architecture for collaborative terminal work.
+# Models instruction layering, optional todo planning, tool execution,
+# intermediary progress updates, and final user response delivery.
+
+name: "Codex"
+version: "1.0"
+description: "GPT-5 coding agent that reads repository context, plans when useful, executes tools, verifies results, and reports progress + final outcomes"
+entry_point: receive_request
+
+entities:
+
+  # --- Core agent ---
+  - id: codex
+    type: agent
+    label: "Codex (GPT-5)"
+    model: gpt-5
+    system_prompt: "Instruction-priority coding agent for repository work. Executes tools, tracks progress, and returns verified results."
+    tools: [exec_command_tool, write_stdin_tool, filesystem_tool, web_tool, update_plan_tool, apply_patch_tool, parallel_tool]
+    input_schema: AgentInput
+    output_schema: ActionDecision
+    config:
+      thinking: high
+      max_tokens: 32768
+
+  # --- Human collaborator ---
+  - id: user
+    type: human
+    label: "User"
+    role: operator
+
+  # --- Stores ---
+  - id: conversation_memory
+    type: store
+    label: "Conversation Memory"
+    store_type: kv
+    schema: ConversationTurn
+    retention: session
+
+  - id: instruction_store
+    type: store
+    label: "Instruction Stack"
+    store_type: file
+    schema: InstructionBundle
+    retention: session
+    config:
+      layers: ["system", "developer", "repo AGENTS.md", "user"]
+
+  - id: workspace_store
+    type: store
+    label: "Workspace Files"
+    store_type: file
+    schema: WorkspaceArtifact
+    retention: persistent
+    config:
+      root: "/path/to/projects"
+
+  - id: todo_memory
+    type: store
+    label: "Todo / Plan State"
+    store_type: kv
+    schema: PlanState
+    retention: session
+
+  # --- Tooling ---
+  - id: exec_command_tool
+    type: tool
+    label: "exec_command"
+    tool_type: shell
+    input_schema: ExecCommandInput
+    output_schema: ExecCommandOutput
+    side_effects: ["filesystem", "processes", "network"]
+
+  - id: write_stdin_tool
+    type: tool
+    label: "write_stdin"
+    tool_type: function
+    input_schema: WriteStdinInput
+    output_schema: WriteStdinOutput
+    side_effects: ["processes"]
+
+  - id: filesystem_tool
+    type: tool
+    label: "filesystem MCP"
+    tool_type: mcp
+    input_schema: FileOpInput
+    output_schema: FileOpOutput
+    side_effects: ["filesystem"]
+
+  - id: web_tool
+    type: tool
+    label: "web search/fetch"
+    tool_type: api
+    input_schema: WebQuery
+    output_schema: WebResult
+    side_effects: ["network"]
+
+  - id: update_plan_tool
+    type: tool
+    label: "update_plan"
+    tool_type: function
+    input_schema: PlanUpdate
+    output_schema: PlanState
+    side_effects: ["state"]
+
+  - id: apply_patch_tool
+    type: tool
+    label: "apply_patch"
+    tool_type: function
+    input_schema: PatchInput
+    output_schema: PatchOutput
+    side_effects: ["filesystem"]
+
+  - id: parallel_tool
+    type: tool
+    label: "multi_tool_use.parallel"
+    tool_type: composite
+    input_schema: ToolCallBatch
+    output_schema: ToolResultBatch
+    side_effects: ["filesystem", "processes", "network"]
+
+  # --- Channels ---
+  - id: commentary_channel
+    type: channel
+    label: "Intermediary Updates"
+    channel_type: topic
+    message_schema: ProgressMessage
+    retention: last
+    reducer: replace
+
+  - id: final_channel
+    type: channel
+    label: "Final Answer Channel"
+    channel_type: request_reply
+    message_schema: FinalMessage
+    retention: last
+    reducer: replace
+
+  # --- Runtime configs ---
+  - id: runtime_permissions
+    type: config
+    label: "Runtime Permissions"
+    values:
+      sandbox_mode: "danger-full-access"
+      network_access: true
+      approval_policy: "never"
+
+  - id: collaboration_mode
+    type: config
+    label: "Collaboration Mode"
+    values:
+      mode: "default"
+      request_user_input_available: false
+
+processes:
+
+  - id: receive_request
+    type: step
+    label: "Receive Request"
+    description: "Accept user objective and any explicit constraints"
+    data_out: UserRequest
+    logic: |
+      # Normalize inbound message into canonical request shape.
+      state.data["request"] = state.data.get("request", {})
+
+  - id: load_context
+    type: step
+    label: "Load Context"
+    description: "Collect instruction stack, prior turns, active plan state, and workspace context"
+    data_in: UserRequest
+    data_out: ContextBundle
+
+  - id: enforce_policy
+    type: policy
+    label: "Apply Behavioral Policy"
+    targets: [run_tools, publish_progress, finalize_response]
+    effect: modify
+    rules:
+      - "Follow instruction priority: system > developer > user > local defaults"
+      - "Prefer direct execution over speculative planning unless planning adds control"
+      - "Report what was done and what could not be verified"
+    enforcement: strict
+
+  - id: planning_gate
+    type: gate
+    label: "Need Todo Plan?"
+    condition: "task is multi-step or user requests planning"
+    branches:
+      - condition: "plan needed"
+        target: initialize_plan
+      - condition: "no plan needed"
+        target: decide_next_action
+
+  - id: initialize_plan
+    type: step
+    label: "Initialize / Update Plan"
+    description: "Create task steps with pending/in_progress/completed states"
+    data_in: ContextBundle
+    data_out: PlanState
+
+  - id: publish_progress
+    type: step
+    label: "Publish Progress"
+    description: "Emit concise intermediary status update before substantial work"
+    data_out: ProgressMessage
+    logic: |
+      # Keep progress updates brief and action-oriented.
+      state.data["progress_summary"] = state.data.get("progress_summary", "Working on the next task step.")
+
+  - id: emit_progress
+    type: step
+    label: "Emit Progress To User"
+    description: "Deliver progress update in commentary channel"
+    data_in: ProgressMessage
+    logic: |
+      state.data["last_channel"] = "commentary"
+
+  - id: decide_next_action
+    type: step
+    label: "Decide Next Action"
+    description: "Produce either tool calls or a direct response strategy"
+    data_in: AgentInput
+    data_out: ActionDecision
+
+  - id: action_gate
+    type: gate
+    label: "Tool Calls Required?"
+    condition: "action_type == tool_calls or action_decision.action_type == tool_calls"
+    branches:
+      - condition: "tool calls requested"
+        target: run_tools
+      - condition: "response ready"
+        target: finalize_response
+
+  - id: run_tools
+    type: step
+    label: "Run Tool Calls"
+    description: "Execute shell/MCP/web operations; use parallel tool for independent reads"
+    data_in: ToolCallBatch
+    data_out: ToolResultBatch
+
+  - id: observe_results
+    type: step
+    label: "Observe Tool Results"
+    description: "Normalize tool outputs into state and extract evidence for next decision"
+    data_in: ToolResultBatch
+    data_out: ToolResultBatch
+
+  - id: update_plan_state
+    type: step
+    label: "Update Plan State"
+    description: "Advance todo statuses to reflect work completed and remaining"
+    data_in: ToolResultBatch
+    data_out: PlanState
+
+  - id: completion_gate
+    type: gate
+    label: "Task Complete?"
+    condition: "objective met and acceptance criteria satisfied"
+    branches:
+      - condition: "work remains"
+        target: publish_progress
+      - condition: "objective satisfied"
+        target: finalize_response
+
+  - id: finalize_response
+    type: step
+    label: "Finalize Response"
+    description: "Compose final answer with concrete outcomes and validation status"
+    data_out: FinalMessage
+    logic: |
+      state.data["finalized"] = True
+
+  - id: emit_final
+    type: step
+    label: "Emit Final To User"
+    description: "Deliver final response in final channel"
+    data_in: FinalMessage
+    logic: |
+      state.data["last_channel"] = "final"
+
+  - id: persist_turn
+    type: step
+    label: "Persist Turn"
+    description: "Persist assistant/user/tool events into conversation memory"
+
+edges:
+
+  # --- User input + main control flow ---
+  - type: flow
+    from: user
+    to: receive_request
+    label: "User request"
+    data: UserRequest
+
+  - type: flow
+    from: receive_request
+    to: load_context
+    label: "Begin context assembly"
+
+  - type: flow
+    from: load_context
+    to: enforce_policy
+    label: "Apply policy constraints"
+
+  - type: flow
+    from: enforce_policy
+    to: planning_gate
+    label: "Policy-constrained execution"
+
+  - type: branch
+    from: planning_gate
+    to: initialize_plan
+    condition: "plan needed"
+    label: "Create/update todo plan"
+
+  - type: branch
+    from: planning_gate
+    to: decide_next_action
+    condition: "no plan needed"
+    label: "Skip plan initialization"
+
+  - type: flow
+    from: initialize_plan
+    to: publish_progress
+    label: "Plan initialized"
+
+  - type: flow
+    from: publish_progress
+    to: decide_next_action
+    label: "Continue execution"
+
+  - type: flow
+    from: publish_progress
+    to: emit_progress
+    label: "Immediate progress emission"
+
+  - type: flow
+    from: decide_next_action
+    to: action_gate
+    label: "Decision available"
+
+  - type: branch
+    from: action_gate
+    to: run_tools
+    condition: "tool calls requested"
+    label: "Execute tools"
+
+  - type: branch
+    from: action_gate
+    to: finalize_response
+    condition: "response ready"
+    label: "No further tool usage"
+
+  - type: flow
+    from: run_tools
+    to: observe_results
+    label: "Collect tool outputs"
+
+  - type: flow
+    from: observe_results
+    to: update_plan_state
+    label: "State update"
+
+  - type: flow
+    from: update_plan_state
+    to: completion_gate
+    label: "Check completion"
+
+  - type: branch
+    from: completion_gate
+    to: publish_progress
+    condition: "work remains"
+    label: "Iterate"
+
+  - type: branch
+    from: completion_gate
+    to: finalize_response
+    condition: "objective satisfied"
+    label: "Finish"
+
+  - type: flow
+    from: finalize_response
+    to: emit_final
+    label: "Route final payload to output"
+
+  - type: flow
+    from: emit_final
+    to: persist_turn
+    label: "Persist response"
+
+  - type: loop
+    from: persist_turn
+    to: receive_request
+    label: "Wait for next user request"
+    condition: "always"
+
+  # --- Agent/tool invocations ---
+  - type: invoke
+    from: decide_next_action
+    to: codex
+    label: "Reason over context and pick next action"
+    input: AgentInput
+    output: ActionDecision
+
+  - type: invoke
+    from: initialize_plan
+    to: update_plan_tool
+    label: "Create plan state"
+    input: PlanUpdate
+    output: PlanState
+
+  - type: invoke
+    from: update_plan_state
+    to: update_plan_tool
+    label: "Advance plan statuses"
+    input: PlanUpdate
+    output: PlanState
+
+  - type: invoke
+    from: run_tools
+    to: parallel_tool
+    label: "Run independent reads in parallel"
+    input: ToolCallBatch
+    output: ToolResultBatch
+
+  - type: invoke
+    from: run_tools
+    to: exec_command_tool
+    label: "Shell execution"
+    input: ExecCommandInput
+    output: ExecCommandOutput
+
+  - type: invoke
+    from: run_tools
+    to: write_stdin_tool
+    label: "Continue PTY session"
+    input: WriteStdinInput
+    output: WriteStdinOutput
+
+  - type: invoke
+    from: run_tools
+    to: filesystem_tool
+    label: "Filesystem operations"
+    input: FileOpInput
+    output: FileOpOutput
+
+  - type: invoke
+    from: run_tools
+    to: web_tool
+    label: "Web lookup for freshness-sensitive facts"
+    input: WebQuery
+    output: WebResult
+
+  - type: invoke
+    from: run_tools
+    to: apply_patch_tool
+    label: "Structured file patching"
+    input: PatchInput
+    output: PatchOutput
+
+  # --- Store interactions ---
+  - type: read
+    from: load_context
+    to: instruction_store
+    label: "Load instruction hierarchy"
+    data: InstructionBundle
+
+  - type: read
+    from: load_context
+    to: conversation_memory
+    label: "Load recent conversation turns"
+    data: ConversationTurn
+
+  - type: read
+    from: load_context
+    to: todo_memory
+    label: "Load active todo state"
+    data: PlanState
+
+  - type: read
+    from: load_context
+    to: workspace_store
+    label: "Load repository context"
+    query: WorkspaceQuery
+    data: WorkspaceArtifact
+
+  - type: write
+    from: initialize_plan
+    to: todo_memory
+    label: "Persist initial plan"
+    data: PlanState
+
+  - type: read
+    from: update_plan_state
+    to: todo_memory
+    label: "Read existing plan"
+    data: PlanState
+
+  - type: write
+    from: update_plan_state
+    to: todo_memory
+    label: "Persist updated plan"
+    data: PlanState
+
+  - type: write
+    from: observe_results
+    to: conversation_memory
+    label: "Persist tool observations"
+    data: ConversationTurn
+
+  - type: write
+    from: persist_turn
+    to: conversation_memory
+    label: "Persist assistant turn"
+    data: ConversationTurn
+
+  # --- Channel-based user output ---
+  - type: publish
+    from: publish_progress
+    to: commentary_channel
+    label: "Intermediary update"
+    data: ProgressMessage
+
+  - type: subscribe
+    from: commentary_channel
+    to: emit_progress
+    label: "Display progress"
+    data: ProgressMessage
+
+  - type: flow
+    from: emit_progress
+    to: user
+    label: "Commentary message"
+    data: ProgressMessage
+
+  - type: publish
+    from: finalize_response
+    to: final_channel
+    label: "Final answer payload"
+    data: FinalMessage
+
+  - type: subscribe
+    from: final_channel
+    to: emit_final
+    label: "Deliver final response"
+    data: FinalMessage
+
+  - type: flow
+    from: emit_final
+    to: user
+    label: "Final response"
+    data: FinalMessage
+
+  # --- Policy/config influence ---
+  - type: modify
+    from: runtime_permissions
+    to: run_tools
+    label: "Permission envelope"
+    effect: "No approvals required; full filesystem + network access"
+
+  - type: modify
+    from: collaboration_mode
+    to: planning_gate
+    label: "Mode-specific behavior"
+    effect: "request_user_input tool unavailable in default mode"
+
+  - type: modify
+    from: enforce_policy
+    to: run_tools
+    label: "Safe execution policy"
+    effect: "Prefer non-destructive commands; avoid unauthorized destructive actions"
+
+  - type: modify
+    from: enforce_policy
+    to: publish_progress
+    label: "Communication policy"
+    effect: "Send concise progress updates during substantial work"
+
+  - type: modify
+    from: enforce_policy
+    to: finalize_response
+    label: "Reporting policy"
+    effect: "Include concrete outcomes, limitations, and validation status"
+
+schemas:
+
+  - name: UserRequest
+    description: "Inbound user message and task constraints"
+    fields:
+      - { name: text, type: string }
+      - { name: files, type: "list<string>", optional: true }
+      - { name: constraints, type: "list<string>", optional: true }
+      - { name: requested_mode, type: "enum[default, plan]", optional: true }
+
+  - name: ContextBundle
+    description: "Execution context assembled before deciding actions"
+    fields:
+      - { name: request, type: UserRequest }
+      - { name: instruction_bundle, type: InstructionBundle }
+      - { name: conversation_history, type: "list<ConversationTurn>" }
+      - { name: workspace_summary, type: string, optional: true }
+      - { name: active_plan, type: PlanState, optional: true }
+
+  - name: AgentInput
+    description: "Structured input sent to Codex for next-action selection"
+    fields:
+      - { name: context, type: ContextBundle }
+      - { name: objective, type: string }
+      - { name: acceptance_criteria, type: "list<string>", optional: true }
+
+  - name: ActionDecision
+    description: "Action selected by Codex for the next iteration"
+    fields:
+      - { name: action_type, type: "enum[tool_calls, respond]" }
+      - { name: tool_calls, type: "list<ToolCall>", optional: true }
+      - { name: draft_response, type: string, optional: true }
+      - { name: done, type: boolean }
+
+  - name: ToolCall
+    description: "Single tool invocation request"
+    fields:
+      - { name: tool_name, type: string }
+      - { name: arguments, type: object }
+
+  - name: ToolCallBatch
+    description: "Batch of tool calls that can run serially or in parallel"
+    fields:
+      - { name: calls, type: "list<ToolCall>" }
+
+  - name: ToolResult
+    description: "Single tool invocation result"
+    fields:
+      - { name: tool_name, type: string }
+      - { name: success, type: boolean }
+      - { name: output, type: string, optional: true }
+      - { name: error, type: string, optional: true }
+
+  - name: ToolResultBatch
+    description: "Aggregated results from one execution cycle"
+    fields:
+      - { name: results, type: "list<ToolResult>" }
+
+  - name: PlanStep
+    description: "Single tracked todo item"
+    fields:
+      - { name: step, type: string }
+      - { name: status, type: "enum[pending, in_progress, completed]" }
+
+  - name: PlanUpdate
+    description: "Payload for creating or updating plan state"
+    fields:
+      - { name: explanation, type: string, optional: true }
+      - { name: plan, type: "list<PlanStep>" }
+
+  - name: PlanState
+    description: "Current todo tracking state"
+    fields:
+      - { name: explanation, type: string, optional: true }
+      - { name: steps, type: "list<PlanStep>" }
+      - { name: has_active_step, type: boolean }
+
+  - name: ProgressMessage
+    description: "Short intermediary update published while work is in progress"
+    fields:
+      - { name: summary, type: string }
+      - { name: current_step, type: string, optional: true }
+
+  - name: FinalMessage
+    description: "Final answer to user after execution loop completes"
+    fields:
+      - { name: answer, type: string }
+      - { name: changed_files, type: "list<string>", optional: true }
+      - { name: verification, type: string, optional: true }
+
+  - name: ConversationTurn
+    description: "Persisted user/assistant/tool event"
+    fields:
+      - { name: role, type: "enum[user, assistant, tool]" }
+      - { name: channel, type: "enum[commentary, final, internal]" }
+      - { name: content, type: string }
+      - { name: timestamp, type: string, optional: true }
+
+  - name: InstructionBundle
+    description: "Resolved instruction hierarchy and operational constraints"
+    fields:
+      - { name: layers, type: "list<string>" }
+      - { name: permissions, type: object }
+      - { name: style_constraints, type: "list<string>", optional: true }
+
+  - name: WorkspaceQuery
+    description: "Query used to retrieve workspace context"
+    fields:
+      - { name: pattern, type: string, optional: true }
+      - { name: path, type: string, optional: true }
+
+  - name: WorkspaceArtifact
+    description: "File artifact referenced from workspace"
+    fields:
+      - { name: path, type: string }
+      - { name: artifact_type, type: "enum[file, directory, diff, command_output]" }
+      - { name: content_excerpt, type: string, optional: true }
+
+  - name: ExecCommandInput
+    description: "Input for shell command execution"
+    fields:
+      - { name: cmd, type: string }
+      - { name: workdir, type: string, optional: true }
+      - { name: yield_time_ms, type: integer, optional: true }
+
+  - name: ExecCommandOutput
+    description: "Output from shell command execution"
+    fields:
+      - { name: exit_code, type: integer }
+      - { name: stdout, type: string, optional: true }
+      - { name: stderr, type: string, optional: true }
+      - { name: session_id, type: integer, optional: true }
+
+  - name: WriteStdinInput
+    description: "Input for continuing a running command session"
+    fields:
+      - { name: session_id, type: integer }
+      - { name: chars, type: string, optional: true }
+      - { name: yield_time_ms, type: integer, optional: true }
+
+  - name: WriteStdinOutput
+    description: "Result from writing to an existing command session"
+    fields:
+      - { name: session_id, type: integer }
+      - { name: output, type: string, optional: true }
+
+  - name: FileOpInput
+    description: "Input for filesystem MCP operations"
+    fields:
+      - { name: operation, type: string }
+      - { name: path, type: string, optional: true }
+      - { name: payload, type: object, optional: true }
+
+  - name: FileOpOutput
+    description: "Result of filesystem operations"
+    fields:
+      - { name: success, type: boolean }
+      - { name: result, type: object, optional: true }
+
+  - name: WebQuery
+    description: "Input for web search/fetch operations"
+    fields:
+      - { name: query, type: string }
+      - { name: recency_days, type: integer, optional: true }
+      - { name: domains, type: "list<string>", optional: true }
+
+  - name: WebResult
+    description: "Web retrieval result set"
+    fields:
+      - { name: sources, type: "list<string>" }
+      - { name: summary, type: string, optional: true }
+
+  - name: PatchInput
+    description: "Structured patch payload"
+    fields:
+      - { name: patch, type: string }
+
+  - name: PatchOutput
+    description: "Result of patch application"
+    fields:
+      - { name: applied, type: boolean }
+      - { name: diff, type: string, optional: true }

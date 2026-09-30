@@ -1,0 +1,195 @@
+name: "Multi-Agent Code Generation Pipeline"
+version: "1.1"
+description: "Automated pipeline for generating, testing, and reviewing code from natural language specs using specialized agents with parallel artifact generation."
+entry_point: intake_request
+
+entities:
+  - id: spec_analyst_agent
+    type: agent
+    label: "Specification Analyst"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a technical architect. Analyze natural language requirements and produce a structured technical specification.
+      Identify all functions, classes, data models, external dependencies, and edge cases.
+    input_schema: CodegenRequest
+    output_schema: TechnicalSpecOutput
+
+  - id: code_generator_agent
+    type: agent
+    label: "Code Generator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an expert software engineer. Generate implementation code based on a technical specification.
+      Include inline comments and a dependency manifest.
+    input_schema: GeneratorInput
+    output_schema: CodeArtifactOutput
+
+  - id: test_writer_agent
+    type: agent
+    label: "Test Writer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a QA engineer. Write comprehensive tests based ONLY on a technical specification.
+      Cover happy paths, edge cases, and error handling.
+    input_schema: TestWriterInput
+    output_schema: TestArtifactOutput
+
+  - id: artifact_store
+    type: store
+    label: "Artifact Store"
+    store_type: file
+    schema: FinalArtifacts
+    retention: persistent
+
+  - id: user
+    type: human
+    label: "User"
+
+processes:
+  - id: intake_request
+    type: step
+    label: "Intake Request"
+    description: "Receive natural language prompt from user"
+    data_out: CodegenRequest
+    logic: |
+      state.data["prompt"] = state.data.get("prompt", "")
+      print(f"Received request: {state.data['prompt'][:100]}...")
+
+  - id: analyze_spec
+    type: step
+    label: "Analyze Specification"
+    description: "Invoke the Analyst to create a technical spec"
+    data_in: CodegenRequest
+    data_out: TechnicalSpecOutput
+    logic: |
+      # Prepare input for the analyst
+      state.data["analyst_input"] = {"prompt": state.data.get("prompt")}
+
+  - id: generate_artifacts
+    type: step
+    label: "Generate Artifacts (Fan-Out)"
+    description: "Invoke Code Generator and Test Writer in parallel"
+    data_in: TechnicalSpecOutput
+    logic: |
+      # Prepare inputs for parallel agents from the analyst's output
+      spec = state.data.get("technical_spec_output", {})
+      state.data["generator_input"] = {"spec": spec.get("spec_content")}
+      state.data["test_writer_input"] = {"spec": spec.get("spec_content")}
+
+  - id: synthesis
+    type: step
+    label: "Synthesize Results"
+    description: "Combine code and tests into a final package"
+    data_in: FinalArtifacts
+    logic: |
+      # Merge namespaced outputs
+      code_out = state.data.get("code_artifact_output", {})
+      test_out = state.data.get("test_artifact_output", {})
+      state.data["final_package"] = {
+        "code": code_out.get("code"),
+        "tests": test_out.get("tests"),
+        "dependencies": code_out.get("dependencies")
+      }
+
+  - id: final_output
+    type: step
+    label: "Final Output"
+    description: "Mark process as complete"
+    logic: |
+      print("Generation complete. Artifacts stored.")
+      state.data["_done"] = True
+
+edges:
+  - type: flow
+    from: user
+    to: intake_request
+    label: "User prompt"
+
+  - type: flow
+    from: intake_request
+    to: analyze_spec
+    label: "Start analysis"
+
+  - type: invoke
+    from: analyze_spec
+    to: spec_analyst_agent
+    label: "Get Technical Spec"
+    input: CodegenRequest
+    output: TechnicalSpecOutput
+
+  - type: flow
+    from: analyze_spec
+    to: generate_artifacts
+    label: "Spec ready"
+
+  # Fan-out: Multiple invoke edges from the same process
+  - type: invoke
+    from: generate_artifacts
+    to: code_generator_agent
+    label: "Generate Code"
+    input: GeneratorInput
+    output: CodeArtifactOutput
+
+  - type: invoke
+    from: generate_artifacts
+    to: test_writer_agent
+    label: "Generate Tests"
+    input: TestWriterInput
+    output: TestArtifactOutput
+
+  - type: flow
+    from: generate_artifacts
+    to: synthesis
+    label: "Artifacts ready"
+
+  - type: flow
+    from: synthesis
+    to: final_output
+    label: "Finish"
+
+  - type: write
+    from: synthesis
+    to: artifact_store
+    label: "Save artifacts"
+    data: FinalArtifacts
+
+schemas:
+  - name: CodegenRequest
+    description: "Initial user requirements"
+    fields:
+      - { name: prompt, type: string }
+
+  - name: TechnicalSpecOutput
+    description: "Structured technical specification"
+    fields:
+      - { name: spec_content, type: string }
+      - { name: architecture_notes, type: string }
+      - { name: dependencies, type: "list<string>" }
+
+  - name: GeneratorInput
+    description: "Input for the code generator"
+    fields:
+      - { name: spec, type: string }
+
+  - name: CodeArtifactOutput
+    description: "Generated code implementation"
+    fields:
+      - { name: code, type: string }
+      - { name: dependencies, type: "list<string>" }
+
+  - name: TestWriterInput
+    description: "Input for the test writer"
+    fields:
+      - { name: spec, type: string }
+
+  - name: TestArtifactOutput
+    description: "Generated test suite"
+    fields:
+      - { name: tests, type: string }
+
+  - name: FinalArtifacts
+    description: "Combined code and test package"
+    fields:
+      - { name: code, type: string }
+      - { name: tests, type: string }
+      - { name: dependencies, type: "list<string>" }

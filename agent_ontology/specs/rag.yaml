@@ -1,0 +1,330 @@
+# ═══════════════════════════════════════════════════════════════
+# RAG Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Retrieval-Augmented Generation: query → retrieve → generate
+# with an ingestion pipeline for documents.
+
+name: "RAG"
+version: "1.0"
+description: "Retrieval-Augmented Generation agent that answers questions using a document knowledge base"
+entry_point: receive_query
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: generator
+    type: agent
+    label: "Generator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an answer generator. You receive a user question and retrieved context passages.
+      Answer the question based ONLY on the provided context. If the context doesn't contain
+      enough information, say so. Cite which passages you used.
+    input_schema: GeneratorInput
+    output_schema: GeneratedAnswer
+
+  - id: query_rewriter
+    type: agent
+    label: "Query Rewriter"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You rewrite user queries to improve retrieval. Given a query, produce a more specific
+      search query that will match relevant documents. Output only the rewritten query text.
+    input_schema: QueryInput
+    output_schema: RewrittenQuery
+
+  - id: relevance_judge
+    type: agent
+    label: "Relevance Judge"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You judge whether retrieved passages are relevant to the query. For each passage,
+      output a relevance score (0-10) and whether to include it. Return a filtered list.
+    input_schema: JudgeInput
+    output_schema: JudgeOutput
+
+  - id: vector_store
+    type: store
+    label: "Vector Store"
+    store_type: vector
+    schema: EmbeddedChunk
+    retention: persistent
+
+  - id: document_store
+    type: store
+    label: "Document Store"
+    store_type: kv
+    schema: Document
+    retention: persistent
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_query
+    type: step
+    label: "Receive Query"
+    description: "Accept user query"
+    data_out: QueryInput
+    logic: |
+      print(f"    Query: {state.data.get('query', '')}")
+
+  - id: rewrite_query
+    type: step
+    label: "Rewrite Query"
+    description: "Improve the query for better retrieval"
+    data_in: QueryInput
+    data_out: RewrittenQuery
+
+  - id: retrieve
+    type: step
+    label: "Retrieve"
+    description: "Search the vector store for relevant passages"
+    data_in: RewrittenQuery
+    data_out: RetrievalResult
+    logic: |
+      search_query = state.data.get("rewritten_query", state.data.get("query", ""))
+      state.data["search_query"] = search_query
+      top_k = state.data.get("top_k", 5)
+      state.data["top_k"] = top_k
+      results = state.data.get("vector_store", [])
+      stored = [e.get("text", "") for e in (results or []) if e.get("text")]
+      state.data["stored_chunks"] = stored
+      state.data["passages"] = stored
+      print(f"    Semantic search returned {len(stored)} chunks for: {search_query[:100]}")
+
+  - id: judge_relevance
+    type: step
+    label: "Judge Relevance"
+    description: "Filter retrieved passages by relevance"
+    data_in: RetrievalResult
+    data_out: JudgeOutput
+
+  - id: check_relevance
+    type: gate
+    label: "Relevant results?"
+    condition: "filtered_passages is not empty"
+    branches:
+      - condition: "no relevant results"
+        target: no_answer
+      - condition: "has relevant results"
+        target: generate_answer
+
+  - id: generate_answer
+    type: step
+    label: "Generate Answer"
+    description: "Generate an answer from the query and relevant context"
+    data_in: GeneratorInput
+    data_out: GeneratedAnswer
+    logic: |
+      passages = state.data.get("filtered_passages", state.data.get("passages", []))
+      state.data["context_passages"] = passages
+      print(f"    Generating from {len(passages)} passages")
+
+  - id: no_answer
+    type: step
+    label: "No Answer"
+    description: "Report that no relevant information was found"
+    logic: |
+      state.data["answer"] = "I could not find relevant information to answer this question."
+      state.data["citations"] = []
+      state.data["_done"] = True
+      print(f"    No relevant passages found")
+
+  - id: emit_answer
+    type: step
+    label: "Emit Answer"
+    description: "Return the generated answer"
+    data_out: GeneratedAnswer
+    logic: |
+      answer = state.data.get("answer", "")
+      citations = state.data.get("citations", [])
+      print(f"    Answer: {answer[:200]}")
+      print(f"    Citations: {len(citations)}")
+      state.data["_done"] = True
+
+  # ── Ingestion pipeline (separate entry for document loading) ──
+
+  - id: ingest_document
+    type: step
+    label: "Ingest Document"
+    description: "Chunk a document and store embeddings"
+    data_in: Document
+    data_out: ChunkList
+    logic: |
+      text = state.data.get("document_text", "")
+      chunk_size = state.data.get("chunk_size", 500)
+      overlap = state.data.get("chunk_overlap", 50)
+      words = text.split()
+      chunks = []
+      for i in range(0, len(words), chunk_size - overlap):
+          chunk_text = " ".join(words[i:i + chunk_size])
+          chunks.append({"text": chunk_text, "index": len(chunks)})
+      state.data["chunks"] = chunks
+      print(f"    Chunked document into {len(chunks)} chunks")
+
+  - id: embed_and_store
+    type: step
+    label: "Embed & Store"
+    description: "Generate embeddings for chunks and store in vector DB"
+    data_in: ChunkList
+    logic: |
+      chunks = state.data.get("chunks", [])
+      doc_id = state.data.get("document_id", "unknown")
+      for chunk in chunks:
+          entry = {
+              "text": chunk["text"],
+              "embedding": [],
+              "metadata": {"source": doc_id, "index": chunk["index"]}
+          }
+          state.vector_store.write(entry, key=f"{doc_id}_chunk_{chunk['index']}")
+      state.data["text"] = chunks[-1]["text"] if chunks else ""
+      state.data["embedding"] = []
+      state.data["metadata"] = {"source": doc_id, "index": len(chunks) - 1}
+      print(f"    Stored {len(chunks)} chunks in vector store")
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  # Query pipeline
+  - type: flow
+    from: receive_query
+    to: rewrite_query
+    label: "Rewrite for retrieval"
+
+  - type: invoke
+    from: rewrite_query
+    to: query_rewriter
+    label: "Rewrite query"
+    input: QueryInput
+    output: RewrittenQuery
+
+  - type: flow
+    from: rewrite_query
+    to: retrieve
+    label: "Search"
+
+  - type: read
+    from: retrieve
+    to: vector_store
+    label: "Similarity search"
+    query_key: rewritten_query
+    data: EmbeddedChunk
+
+  - type: flow
+    from: retrieve
+    to: judge_relevance
+    label: "Judge results"
+
+  - type: invoke
+    from: judge_relevance
+    to: relevance_judge
+    label: "Filter by relevance"
+    input: JudgeInput
+    output: JudgeOutput
+
+  - type: flow
+    from: judge_relevance
+    to: check_relevance
+    label: "Check if any relevant"
+
+  - type: flow
+    from: check_relevance
+    to: no_answer
+    label: "No results found"
+
+  - type: invoke
+    from: generate_answer
+    to: generator
+    label: "Generate answer"
+    input: GeneratorInput
+    output: GeneratedAnswer
+
+  - type: flow
+    from: generate_answer
+    to: emit_answer
+    label: "Return answer"
+
+  # Ingestion pipeline
+  - type: flow
+    from: ingest_document
+    to: embed_and_store
+    label: "Embed chunks"
+
+  # Note: embed_and_store writes to vector_store via per-chunk loop in logic.
+  # No write edge here — the logic handles the iteration directly.
+
+  - type: write
+    from: ingest_document
+    to: document_store
+    label: "Store raw document"
+    data: Document
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: QueryInput
+    description: "User query"
+    fields:
+      - { name: query, type: string }
+
+  - name: RewrittenQuery
+    description: "Improved query for retrieval"
+    fields:
+      - { name: rewritten_query, type: string }
+      - { name: original_query, type: string }
+
+  - name: RetrievalResult
+    description: "Raw retrieval results"
+    fields:
+      - { name: passages, type: "list<string>" }
+      - { name: scores, type: "list<float>" }
+      - { name: search_query, type: string }
+
+  - name: JudgeInput
+    description: "Input to relevance judge"
+    fields:
+      - { name: query, type: string }
+      - { name: passages, type: "list<string>" }
+      - { name: stored_chunks, type: "list<string>" }
+
+  - name: JudgeOutput
+    description: "Filtered passages"
+    fields:
+      - { name: filtered_passages, type: "list<string>" }
+      - { name: relevance_scores, type: "list<float>" }
+
+  - name: GeneratorInput
+    description: "Input to answer generator"
+    fields:
+      - { name: query, type: string }
+      - { name: context_passages, type: "list<string>" }
+
+  - name: GeneratedAnswer
+    description: "Generated answer with citations"
+    fields:
+      - { name: answer, type: string }
+      - { name: citations, type: "list<string>" }
+
+  - name: Document
+    description: "A source document"
+    fields:
+      - { name: document_id, type: string }
+      - { name: document_text, type: string }
+      - { name: metadata, type: object }
+
+  - name: ChunkList
+    description: "List of document chunks"
+    fields:
+      - { name: chunks, type: "list<object>" }
+
+  - name: EmbeddedChunk
+    description: "A chunk with its embedding"
+    fields:
+      - { name: text, type: string }
+      - { name: embedding, type: "list<float>" }
+      - { name: metadata, type: object }

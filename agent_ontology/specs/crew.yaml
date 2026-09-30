@@ -1,0 +1,430 @@
+# ═══════════════════════════════════════════════════════════════
+# Crew Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Multi-agent collaboration pattern inspired by CrewAI.
+# A coordinator assigns tasks to specialized agents, collects
+# results, reviews quality, and synthesizes the final output.
+
+name: "Crew"
+version: "1.0"
+description: "Multi-agent collaboration system where specialized agents work together under a coordinator"
+entry_point: receive_objective
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: coordinator
+    type: agent
+    label: "Coordinator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a project coordinator managing a team of AI agents. Given an objective,
+      break it into assignments for your team: a Researcher, a Writer, and a Reviewer.
+      Each assignment should specify: agent (researcher/writer/reviewer), task description,
+      and any dependencies on other assignments. Return as a JSON list of assignments.
+    input_schema: CoordinatorInput
+    output_schema: AssignmentList
+
+  - id: researcher
+    type: agent
+    label: "Researcher"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a research specialist. You receive a research task and produce comprehensive,
+      factual findings. Structure your output clearly with sections and bullet points.
+      Focus on accuracy and completeness.
+    input_schema: AgentTask
+    output_schema: AgentResult
+
+  - id: writer
+    type: agent
+    label: "Writer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a professional writer. You receive a writing task along with research context.
+      Produce clear, engaging, well-structured content. Use the research provided as your
+      source material. Maintain a professional tone.
+    input_schema: AgentTask
+    output_schema: AgentResult
+
+  - id: reviewer
+    type: agent
+    label: "Reviewer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a quality reviewer. You receive content to review against the original objective.
+      Check for: accuracy, completeness, clarity, consistency. Provide a quality score (1-10)
+      and specific improvement suggestions. If score >= 7, approve. Otherwise, list required changes.
+    input_schema: ReviewInput
+    output_schema: ReviewResult
+
+  - id: synthesizer
+    type: agent
+    label: "Synthesizer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You combine multiple agent results into a single coherent output. Integrate research,
+      writing, and review feedback into a polished final deliverable. Resolve any inconsistencies
+      between agent outputs.
+    input_schema: SynthesisInput
+    output_schema: SynthesisOutput
+
+  - id: shared_workspace
+    type: store
+    label: "Shared Workspace"
+    store_type: kv
+    schema: WorkItem
+    retention: session
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_objective
+    type: step
+    label: "Receive Objective"
+    description: "Accept the team objective"
+    data_out: CoordinatorInput
+    logic: |
+      state.data["agent_results"] = {}
+      state.data["revision_count"] = 0
+      state.data["max_revisions"] = 2
+      print(f"    Objective: {state.data.get('objective', '')}")
+
+  - id: plan_assignments
+    type: step
+    label: "Plan Assignments"
+    description: "Coordinator breaks objective into agent assignments"
+    data_in: CoordinatorInput
+    data_out: AssignmentList
+
+  - id: execute_assignments
+    type: step
+    label: "Execute Assignments"
+    description: "Run each assignment with the appropriate agent"
+    data_in: AssignmentList
+    data_out: AgentResult
+    logic: |
+      assignments = state.data.get("assignments", [])
+      state.data["current_assignment_idx"] = 0
+      state.data["total_assignments"] = len(assignments)
+      print(f"    {len(assignments)} assignments to execute")
+
+  - id: run_agent
+    type: step
+    label: "Run Agent"
+    description: "Execute the current assignment with the assigned agent"
+    logic: |
+      assignments = state.data.get("assignments", [])
+      idx = state.data.get("current_assignment_idx", 0)
+      if idx < len(assignments):
+          assignment = assignments[idx]
+          state.data["current_assignment"] = assignment
+          state.data["task_description"] = assignment.get("task", "")
+          state.data["assigned_agent"] = assignment.get("agent", "researcher")
+          context_keys = assignment.get("depends_on", [])
+          state.data["context"] = [state.data["agent_results"].get(k, "") for k in context_keys if k in state.data.get("agent_results", {})]
+          print(f"    Assignment {idx + 1}/{len(assignments)}: [{state.data['assigned_agent']}] {state.data['task_description'][:80]}")
+
+  - id: dispatch_agent
+    type: gate
+    label: "Which agent?"
+    condition: "assigned_agent == researcher"
+    branches:
+      - condition: "is researcher"
+        target: call_researcher
+      - condition: "is writer or reviewer"
+        target: check_writer
+
+  - id: check_writer
+    type: gate
+    label: "Writer?"
+    condition: "assigned_agent == writer"
+    branches:
+      - condition: "is writer"
+        target: call_writer
+      - condition: "is reviewer"
+        target: call_reviewer_agent
+
+  - id: call_researcher
+    type: step
+    label: "Call Researcher"
+    description: "Send task to researcher agent"
+
+  - id: call_writer
+    type: step
+    label: "Call Writer"
+    description: "Send task to writer agent"
+
+  - id: call_reviewer_agent
+    type: step
+    label: "Call Reviewer"
+    description: "Send task to reviewer agent"
+
+  - id: collect_result
+    type: step
+    label: "Collect Result"
+    description: "Store the agent's result and advance to next assignment"
+    logic: |
+      idx = state.data.get("current_assignment_idx", 0)
+      assignment = state.data.get("current_assignment", {})
+      result_text = state.data.get("agent_output", state.data.get("result", state.data.get("improvements", "")))
+      agent_results = state.data.get("agent_results", {})
+      agent_results[f"assignment_{idx}"] = result_text
+      state.data["agent_results"] = agent_results
+      state.data["current_assignment_idx"] = idx + 1
+      print(f"    Collected result for assignment {idx + 1}")
+
+  - id: check_more_assignments
+    type: gate
+    label: "More assignments?"
+    condition: "current_assignment_idx < total_assignments"
+    branches:
+      - condition: "no more"
+        target: review_all
+      - condition: "more to do"
+        target: run_agent
+
+  - id: review_all
+    type: step
+    label: "Review All"
+    description: "Send all results to reviewer for quality check"
+    data_in: ReviewInput
+    data_out: ReviewResult
+    logic: |
+      agent_results = state.data.get("agent_results", {})
+      state.data["content_to_review"] = "\n\n".join(str(v) for v in agent_results.values())
+      print(f"    Reviewing {len(agent_results)} results")
+
+  - id: quality_gate
+    type: gate
+    label: "Quality OK?"
+    condition: "review_score >= 7"
+    branches:
+      - condition: "not approved"
+        target: handle_revision
+      - condition: "approved"
+        target: synthesize
+
+  - id: handle_revision
+    type: step
+    label: "Handle Revision"
+    description: "Process review feedback and decide whether to revise"
+    logic: |
+      count = state.data.get("revision_count", 0) + 1
+      state.data["revision_count"] = count
+      max_rev = state.data.get("max_revisions", 2)
+      if count >= max_rev:
+          print(f"    Max revisions ({max_rev}) reached, proceeding")
+      else:
+          state.data["feedback"] = state.data.get("improvements", "")
+          print(f"    Revision {count}/{max_rev}")
+
+  - id: revision_gate
+    type: gate
+    label: "Retry or finalize?"
+    condition: "revision_count >= max_revisions"
+    branches:
+      - condition: "under limit"
+        target: execute_assignments
+      - condition: "at limit"
+        target: synthesize
+
+  - id: synthesize
+    type: step
+    label: "Synthesize"
+    description: "Combine all agent results into the final deliverable"
+    data_in: SynthesisInput
+    data_out: SynthesisOutput
+    logic: |
+      agent_results = state.data.get("agent_results", {})
+      state.data["all_results"] = list(agent_results.values())
+      print(f"    Synthesizing {len(agent_results)} results into final output")
+
+  - id: emit_output
+    type: step
+    label: "Emit Output"
+    description: "Return the final deliverable"
+    logic: |
+      output = state.data.get("final_output", state.data.get("synthesis", ""))
+      print(f"    Final output: {str(output)[:200]}")
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  - type: flow
+    from: receive_objective
+    to: plan_assignments
+    label: "Plan"
+
+  - type: invoke
+    from: plan_assignments
+    to: coordinator
+    label: "Create assignments"
+    input: CoordinatorInput
+    output: AssignmentList
+
+  - type: flow
+    from: plan_assignments
+    to: execute_assignments
+    label: "Execute"
+
+  - type: flow
+    from: execute_assignments
+    to: run_agent
+    label: "Start assignments"
+
+  - type: flow
+    from: run_agent
+    to: dispatch_agent
+    label: "Dispatch"
+
+  - type: flow
+    from: dispatch_agent
+    to: check_writer
+    label: "Check writer"
+
+  - type: invoke
+    from: call_researcher
+    to: researcher
+    label: "Research"
+    input: AgentTask
+    output: AgentResult
+
+  - type: invoke
+    from: call_writer
+    to: writer
+    label: "Write"
+    input: AgentTask
+    output: AgentResult
+
+  - type: invoke
+    from: call_reviewer_agent
+    to: reviewer
+    label: "Review"
+    input: ReviewInput
+    output: ReviewResult
+
+  - type: flow
+    from: call_researcher
+    to: collect_result
+    label: "Collect"
+
+  - type: flow
+    from: call_writer
+    to: collect_result
+    label: "Collect"
+
+  - type: flow
+    from: call_reviewer_agent
+    to: collect_result
+    label: "Collect"
+
+  - type: flow
+    from: collect_result
+    to: check_more_assignments
+    label: "Check progress"
+
+  - type: write
+    from: collect_result
+    to: shared_workspace
+    label: "Store result"
+    data: WorkItem
+
+  - type: invoke
+    from: review_all
+    to: reviewer
+    label: "Quality review"
+    input: ReviewInput
+    output: ReviewResult
+
+  - type: flow
+    from: review_all
+    to: quality_gate
+    label: "Check quality"
+
+  - type: flow
+    from: handle_revision
+    to: revision_gate
+    label: "Check retry limit"
+
+  - type: invoke
+    from: synthesize
+    to: synthesizer
+    label: "Combine results"
+    input: SynthesisInput
+    output: SynthesisOutput
+
+  - type: flow
+    from: synthesize
+    to: emit_output
+    label: "Deliver"
+
+  - type: loop
+    from: check_more_assignments
+    to: run_agent
+    label: "Next assignment"
+    condition: "current_assignment_idx < total_assignments"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: CoordinatorInput
+    description: "Input to the coordinator"
+    fields:
+      - { name: objective, type: string }
+
+  - name: AssignmentList
+    description: "List of agent assignments"
+    fields:
+      - { name: assignments, type: "list<object>" }
+      - { name: objective, type: string }
+
+  - name: AgentTask
+    description: "Task for an individual agent"
+    fields:
+      - { name: task_description, type: string }
+      - { name: context, type: "list<string>" }
+      - { name: objective, type: string }
+
+  - name: AgentResult
+    description: "Result from an agent"
+    fields:
+      - { name: agent_output, type: string }
+      - { name: result, type: string }
+
+  - name: ReviewInput
+    description: "Input to the reviewer"
+    fields:
+      - { name: content_to_review, type: string }
+      - { name: objective, type: string }
+
+  - name: ReviewResult
+    description: "Review output"
+    fields:
+      - { name: review_score, type: integer }
+      - { name: approved, type: boolean }
+      - { name: improvements, type: string }
+
+  - name: SynthesisInput
+    description: "Input to synthesizer"
+    fields:
+      - { name: all_results, type: "list<string>" }
+      - { name: objective, type: string }
+
+  - name: SynthesisOutput
+    description: "Final synthesized output"
+    fields:
+      - { name: final_output, type: string }
+      - { name: synthesis, type: string }
+
+  - name: WorkItem
+    description: "Workspace entry"
+    fields:
+      - { name: key, type: string }
+      - { name: value, type: string }
+      - { name: agent, type: string }

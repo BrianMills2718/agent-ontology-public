@@ -1,0 +1,16 @@
+name: "ReAct + Self-Refine"
+description: "Reasoning agent with quality refinement: reasons with tools, then critiques and refines the answer"
+version: "1.0"
+model: "gemini-3-flash-preview"
+compose:
+  - pattern: reasoning_loop
+    as: rl
+    config:
+      max_steps: 10
+
+  - pattern: critique_cycle
+    as: cc
+    graft_after: rl
+    config:
+      max_rounds: 2
+      quality_threshold: 7

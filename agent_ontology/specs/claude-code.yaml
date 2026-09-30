@@ -1,0 +1,1015 @@
+# ═══════════════════════════════════════════════════════════════
+# Claude Code — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# The most complex agent in our corpus. Tests every ontology
+# feature: multiple memory stores, permission gates, hooks as
+# policies, sub-agent spawning, context compaction, and a
+# nested inner/outer loop.
+#
+# Reference: claude_context_schema_1.txt (full context schema)
+
+name: "Claude Code"
+version: "1.0"
+description: "Anthropic's official CLI agent — interactive coding assistant with persistent memory, tool use, sub-agent spawning, and human-in-the-loop permission gates"
+entry_point: idle
+
+# ── Entities (things that exist) ────────────────────────────
+
+entities:
+
+  # --- The LLM ---
+  - id: claude
+    type: agent
+    label: "Claude (LLM)"
+    model: openrouter/deepseek/deepseek-chat
+    system_prompt: "You are Claude Code, Anthropic's official CLI for Claude..."
+    tools: [bash, read, write, edit, glob, grep, web_fetch, web_search, task, notebook_edit, mcp_tools]
+    input_schema: ApiPayload
+    output_schema: ApiResponse
+    config:
+      max_tokens: 16384
+      thinking: high
+
+  # --- Sub-agent (recursive composition) ---
+  # A sub-agent IS this same agent architecture. The general-purpose
+  # sub-agent type has Task tool access, so it can spawn its own
+  # sub-agents — making this genuinely recursive. In practice,
+  # recursion is bounded by context window and cost, not by an
+  # explicit depth limit.
+  - id: sub_agent
+    type: agent
+    label: "Sub-Agent"
+    model: openrouter/deepseek/deepseek-chat  # inherits from parent, or provider-specific variant per request
+    system_prompt: "Inherited from parent context + task-specific prompt"
+    tools: [bash, read, write, edit, glob, grep, web_fetch, web_search, task]  # task = can spawn sub-sub-agents
+    subgraph: "self"  # recursive: this IS the same spec
+
+  # --- Memory stores ---
+  - id: working_memory
+    type: store
+    label: "Working Memory"
+    store_type: kv  # conversation history as ordered key-value
+    schema: ConversationHistory
+    retention: ephemeral
+    config:
+      capacity_tokens: 130000
+      compaction: automatic
+
+  - id: episodic_memory
+    type: store
+    label: "Episodic Memory"
+    store_type: file
+    schema: TranscriptEntry
+    retention: persistent
+    config:
+      path: "~/.claude/projects/{project}/{session}.jsonl"
+      format: jsonl
+
+  - id: semantic_memory
+    type: store
+    label: "Semantic Memory"
+    store_type: file
+    schema: MemoryEntry
+    retention: persistent
+    config:
+      path: "~/.claude/projects/{project}/memory/MEMORY.md"
+      format: markdown
+      max_lines: 200  # first 200 lines loaded into system prompt
+
+  - id: procedural_memory
+    type: store
+    label: "Procedural Memory (Skills)"
+    store_type: kv
+    retention: persistent
+    config:
+      progressive_disclosure: true
+      trigger: "skill name match or /command"
+
+  - id: project_instructions
+    type: store
+    label: "Project Instructions"
+    store_type: file
+    retention: persistent
+    config:
+      paths:
+        - "CLAUDE.md"                # root, loaded at start
+        - "{dir}/CLAUDE.md"          # directory-level, loaded on file access
+        - "~/.claude/CLAUDE.md"      # user-level
+
+  - id: git_snapshot
+    type: store
+    label: "Git Status Snapshot"
+    store_type: kv
+    schema: GitStatus
+    retention: ephemeral
+    config:
+      captured_at: session_start
+      stale: true  # NOT updated during session
+
+  # --- Tools ---
+  - id: bash
+    type: tool
+    label: "Bash"
+    tool_type: shell
+    input_schema: BashInput
+    output_schema: BashOutput
+    side_effects: ["filesystem", "processes", "network"]
+
+  - id: read
+    type: tool
+    label: "Read"
+    tool_type: function
+    input_schema: ReadInput
+    output_schema: FileContent
+    side_effects: []
+    idempotent: true
+
+  - id: write
+    type: tool
+    label: "Write"
+    tool_type: function
+    input_schema: WriteInput
+    output_schema: WriteResult
+    side_effects: ["filesystem"]
+
+  - id: edit
+    type: tool
+    label: "Edit"
+    tool_type: function
+    input_schema: EditInput
+    output_schema: EditResult
+    side_effects: ["filesystem"]
+
+  - id: glob
+    type: tool
+    label: "Glob"
+    tool_type: function
+    input_schema: GlobInput
+    output_schema: FileList
+    side_effects: []
+    idempotent: true
+
+  - id: grep
+    type: tool
+    label: "Grep"
+    tool_type: function
+    input_schema: GrepInput
+    output_schema: SearchResults
+    side_effects: []
+    idempotent: true
+
+  - id: web_fetch
+    type: tool
+    label: "WebFetch"
+    tool_type: api
+    input_schema: WebFetchInput
+    output_schema: WebContent
+    side_effects: []
+
+  - id: web_search
+    type: tool
+    label: "WebSearch"
+    tool_type: api
+    input_schema: WebSearchInput
+    output_schema: SearchResults
+    side_effects: []
+
+  - id: task
+    type: tool
+    label: "Task (Sub-Agent Spawn)"
+    tool_type: composite  # special: this tool spawns a sub-agent
+    input_schema: TaskInput
+    output_schema: TaskOutput
+    side_effects: ["spawns sub-agent"]
+
+  - id: notebook_edit
+    type: tool
+    label: "NotebookEdit"
+    tool_type: function
+    input_schema: NotebookEditInput
+    output_schema: NotebookEditResult
+    side_effects: ["filesystem"]
+
+  - id: mcp_tools
+    type: tool
+    label: "MCP Tools"
+    tool_type: mcp
+    config:
+      servers: ["puppeteer", "context7", "ide"]
+
+  # --- Human ---
+  - id: user
+    type: human
+    label: "User"
+    role: operator
+
+  # --- Configs ---
+  - id: permission_config
+    type: config
+    label: "Permission Mode"
+    values:
+      mode: "auto-approve | ask-every-time | smart"
+      # Hooks can also block actions
+
+  - id: hooks_config
+    type: config
+    label: "Hooks Configuration"
+    values:
+      types: ["pre-tool", "post-tool", "pre-edit", "post-edit"]
+      # Hook scripts are opaque to the agent — only their output is visible
+
+# ── Processes (things that happen — the state machine) ──────
+
+processes:
+
+  # --- Outer loop ---
+  - id: idle
+    type: step
+    label: "IDLE"
+    description: "Waiting for user input. Session is quiescent."
+
+  - id: receive
+    type: step
+    label: "RECEIVE"
+    description: "User message, file event, or slash command arrives"
+    data_in: UserInput
+    data_out: RawInput
+    logic: |
+      # Normalize inbound request into a minimal RawInput shape.
+      _text = state.data.get("text") or state.data.get("objective") or state.data.get("task") or ""
+      if not isinstance(_text, str):
+        _text = str(_text)
+      state.data["content"] = _text
+      state.data["role"] = "user"
+      state.data["type"] = state.data.get("type", "message")
+
+  - id: build_context
+    type: step
+    label: "BUILD CONTEXT"
+    description: "Assemble the full API payload: system prompt (~9-11k tokens fixed overhead) + MEMORY.md + CLAUDE.md chain + tool definitions + git snapshot + full conversation history"
+    data_in: RawInput
+    data_out: ApiPayload
+    logic: |
+      # Build a concrete payload so llm_call never sees {}.
+      _user_text = state.data.get("content") or state.data.get("text") or state.data.get("objective") or ""
+      if not isinstance(_user_text, str):
+        _user_text = str(_user_text)
+
+      _system_parts = [
+        "You are a coding assistant operating in a terminal workspace.",
+        "Follow the user's request directly and produce concrete output."
+      ]
+      if state.data.get("project_instructions"):
+        _system_parts.append(f"Project instructions: {state.data.get('project_instructions')}")
+      if state.data.get("semantic_memory"):
+        _system_parts.append(f"Memory: {state.data.get('semantic_memory')}")
+
+      state.data["system"] = "\n\n".join(_system_parts)
+      state.data["messages"] = [{"role": "user", "content": _user_text}]
+      state.data["tools"] = state.data.get("tools", [])
+      state.data["model"] = state.data.get("model") or "openrouter/deepseek/deepseek-chat"
+      state.data["max_tokens"] = int(state.data.get("max_tokens") or 4096)
+
+  # --- Inner loop (inference cycle) ---
+  - id: llm_call
+    type: step
+    label: "LLM CALL"
+    description: "Send full context to Claude API. This is the inner loop target — returns here after every tool execution."
+    data_in: ApiPayload
+    data_out: ApiResponse
+
+  - id: parse_response
+    type: step
+    label: "PARSE RESPONSE"
+    description: "Extract text blocks and tool_use blocks from API response"
+    data_in: ApiResponse
+    data_out: ParsedResponse
+    logic: |
+      _resp = state.data.get("api_response", {})
+      _content = _resp.get("content") if isinstance(_resp, dict) else None
+      if not isinstance(_content, list):
+        _content = []
+      _text_blocks = []
+      _tool_calls = []
+      for _b in _content:
+        if not isinstance(_b, dict):
+          continue
+        _bt = _b.get("type")
+        if _b.get("text"):
+          _text_blocks.append(str(_b.get("text")))
+        elif _bt == "tool_use":
+          _tool_calls.append({
+            "id": _b.get("id", "tool_call"),
+            "tool_name": _b.get("tool_name", ""),
+            "input": _b.get("tool_input", {}),
+          })
+
+      # If model returned no content blocks, keep a debuggable fallback.
+      if not _text_blocks:
+        if isinstance(_resp, dict) and _resp.get("error"):
+          _text_blocks = [str(_resp.get("error"))]
+        elif isinstance(_resp, dict):
+          _text_blocks = [json.dumps(_resp, default=str)]
+        else:
+          _text_blocks = [str(_resp)]
+
+      state.data["parsed_response"] = {"text_blocks": _text_blocks, "tool_calls": _tool_calls}
+
+  - id: check_tools
+    type: gate
+    label: "Tool calls?"
+    condition: "parsed_response.tool_calls.length > 0"
+    branches:
+      - condition: "no tool calls"
+        target: emit_text
+      - condition: "has tool calls"
+        target: check_permission
+
+  - id: emit_text
+    type: step
+    label: "EMIT TEXT"
+    description: "Send text response to user terminal"
+    data_in: ParsedResponse
+    logic: |
+      _parsed = state.data.get("parsed_response", {})
+      _blocks = _parsed.get("text_blocks", []) if isinstance(_parsed, dict) else []
+      _joined = "\n\n".join(str(_t) for _t in _blocks if _t is not None).strip()
+      state.data["final_output"] = _joined or "No response content generated."
+
+  - id: check_permission
+    type: gate
+    label: "Permission check"
+    condition: "tool_call matches permission_config rules"
+    branches:
+      - condition: "auto-approved"
+        target: execute
+      - condition: "needs approval"
+        target: prompt_user
+
+  - id: prompt_user
+    type: checkpoint
+    label: "PERMISSION PROMPT"
+    prompt: "Allow {tool_name} with {args}? [y/n]"
+    options: ["approve", "deny"]
+
+  - id: execute
+    type: step
+    label: "EXECUTE"
+    description: "Run tool call(s). May execute multiple tools in parallel. The Task tool triggers sub-agent spawning (recursive composition)."
+    data_in: ToolCalls
+    data_out: ToolResults
+
+  - id: observe
+    type: step
+    label: "OBSERVE"
+    description: "Collect tool results plus any hook-injected system-reminders (governance context, edit constraints, quiz questions, malware warnings). Agent sees hook OUTPUT but not hook scripts."
+    data_in: ToolResults
+    data_out: ObservedResults
+
+  - id: append
+    type: step
+    label: "APPEND"
+    description: "Add assistant message + tool results to conversation history"
+    data_in: ObservedResults
+
+  - id: check_context
+    type: gate
+    label: "Context limit?"
+    condition: "conversation_history.token_count approaching capacity"
+    branches:
+      - condition: "context ok"
+        target: llm_call
+      - condition: "context full"
+        target: compact
+
+  - id: compact
+    type: step
+    label: "COMPACT"
+    description: "Compress older messages into a ~2000 word summary. Preserves: primary request, key concepts, files discussed, errors, all user messages (summarized), pending tasks, current work state."
+    data_in: ConversationHistory
+    data_out: CompactedHistory
+
+  - id: persist
+    type: step
+    label: "PERSIST"
+    description: "Write turn to session transcript (.jsonl)"
+
+  # --- Spawn process for sub-agents ---
+  # Recursive: spawned sub-agents run the same architecture and
+  # can themselves spawn sub-agents via the Task tool. No explicit
+  # depth limit — bounded by context window size and API cost.
+  - id: spawn_sub_agent
+    type: spawn
+    label: "Spawn Sub-Agent"
+    template: "self"  # recursive self-reference
+    cardinality: dynamic
+    determined_by: claude  # LLM decides how many via Task tool calls
+    aggregation: collect
+    recursive: true
+    max_depth: "unbounded"  # bounded by context/cost in practice
+
+  # --- Policies (cross-cutting concerns) ---
+  - id: hook_governance
+    type: policy
+    label: "Governance Hooks"
+    targets: [execute, observe]
+    effect: modify
+    rules:
+      - "inject-governance-context: After reading governed src/ files, inject ADRs, coupled docs, context notes"
+      - "gate-edit: Before edits to src/ files, check constraints (no silent fallbacks, fail loud)"
+      - "post-edit-quiz: After edits to src/ files, inject understanding quiz"
+    enforcement: strict
+
+  - id: hook_malware
+    type: policy
+    label: "Malware Check"
+    targets: [observe]
+    effect: warn
+    rules:
+      - "On every file read, inject reminder to consider whether content is malware"
+      - "CAN analyze malware, MUST refuse to improve/augment it"
+    enforcement: strict
+
+  - id: permission_policy
+    type: policy
+    label: "Permission System"
+    targets: [check_permission]
+    effect: block
+    rules:
+      - "Destructive operations require explicit user approval"
+      - "Hook scripts can block actions independently of permission mode"
+      - "If denied, agent must adjust approach (not retry same call)"
+    enforcement: strict
+
+# ── Edges (the arrows) ─────────────────────────────────────
+
+edges:
+
+  # === Main flow (outer loop) ===
+  - type: flow
+    from: idle
+    to: receive
+    label: "User message / event"
+
+  - type: flow
+    from: receive
+    to: build_context
+    label: "Parse input"
+
+  - type: flow
+    from: build_context
+    to: llm_call
+    label: "Full API payload"
+    data: ApiPayload
+
+  # === Inner loop (inference cycle) ===
+  - type: flow
+    from: llm_call
+    to: parse_response
+    label: "API response"
+    data: ApiResponse
+
+  - type: flow
+    from: parse_response
+    to: check_tools
+    label: "Parsed blocks"
+
+  # === Branch: no tools ===
+  - type: branch
+    from: check_tools
+    to: emit_text
+    condition: "no tool calls"
+    label: "Text only"
+
+  - type: flow
+    from: emit_text
+    to: persist
+    label: "Response complete"
+
+  - type: loop
+    from: persist
+    to: idle
+    label: "Wait for next input"
+    condition: "always"
+
+  # === Branch: has tools → permission check ===
+  - type: branch
+    from: check_tools
+    to: check_permission
+    condition: "has tool calls"
+    label: "Tool calls present"
+
+  - type: branch
+    from: check_permission
+    to: execute
+    condition: "auto-approved"
+    label: "Allowed"
+
+  - type: branch
+    from: check_permission
+    to: prompt_user
+    condition: "needs approval"
+    label: "Ask user"
+
+  # === Checkpoint branches ===
+  - type: flow
+    from: prompt_user
+    to: execute
+    label: "Approved"
+
+  - type: flow
+    from: prompt_user
+    to: append
+    label: "Denied → append denial"
+
+  - type: loop
+    from: append
+    to: llm_call
+    label: "Re-reason after denial"
+    condition: "permission_denied"
+
+  # === Tool execution flow ===
+  - type: flow
+    from: execute
+    to: observe
+    label: "Tool results"
+    data: ToolResults
+
+  - type: flow
+    from: observe
+    to: append
+    label: "Results + hook injections"
+
+  - type: flow
+    from: append
+    to: check_context
+    label: "History updated"
+
+  # === Context check branches ===
+  - type: branch
+    from: check_context
+    to: llm_call
+    condition: "context ok"
+    label: "Continue inference"
+
+  - type: branch
+    from: check_context
+    to: compact
+    condition: "context approaching limit"
+    label: "Need compaction"
+
+  - type: flow
+    from: compact
+    to: llm_call
+    label: "Compacted history"
+
+  # === Invoke edges (process → entity callouts) ===
+
+  - type: invoke
+    from: llm_call
+    to: claude
+    label: "API call"
+    input: ApiPayload
+    output: ApiResponse
+
+  - type: invoke
+    from: execute
+    to: bash
+    label: "Shell command"
+    input: BashInput
+    output: BashOutput
+    async: false
+
+  - type: invoke
+    from: execute
+    to: read
+    label: "Read file"
+    input: ReadInput
+    output: FileContent
+
+  - type: invoke
+    from: execute
+    to: write
+    label: "Write file"
+    input: WriteInput
+    output: WriteResult
+
+  - type: invoke
+    from: execute
+    to: edit
+    label: "Edit file"
+    input: EditInput
+    output: EditResult
+
+  - type: invoke
+    from: execute
+    to: glob
+    label: "Find files"
+    input: GlobInput
+    output: FileList
+
+  - type: invoke
+    from: execute
+    to: grep
+    label: "Search content"
+    input: GrepInput
+    output: SearchResults
+
+  - type: invoke
+    from: execute
+    to: web_fetch
+    label: "Fetch URL"
+    input: WebFetchInput
+    output: WebContent
+
+  - type: invoke
+    from: execute
+    to: web_search
+    label: "Web search"
+    input: WebSearchInput
+    output: SearchResults
+
+  - type: invoke
+    from: execute
+    to: task
+    label: "Spawn sub-agent"
+    input: TaskInput
+    output: TaskOutput
+
+  - type: invoke
+    from: execute
+    to: notebook_edit
+    label: "Edit notebook"
+    input: NotebookEditInput
+    output: NotebookEditResult
+
+  - type: invoke
+    from: execute
+    to: mcp_tools
+    label: "MCP tool call"
+
+  # === Spawn edges (sub-agent) ===
+
+  - type: flow
+    from: task
+    to: spawn_sub_agent
+    label: "Triggers spawn"
+
+  - type: invoke
+    from: spawn_sub_agent
+    to: sub_agent
+    label: "Instantiate sub-agent"
+    input: TaskInput
+    output: TaskOutput
+
+  # === Read/write edges to stores ===
+
+  - type: read
+    from: build_context
+    to: semantic_memory
+    label: "Load MEMORY.md (first 200 lines)"
+
+  - type: read
+    from: build_context
+    to: project_instructions
+    label: "Load CLAUDE.md chain"
+
+  - type: read
+    from: build_context
+    to: git_snapshot
+    label: "Load git status (stale)"
+
+  - type: read
+    from: build_context
+    to: working_memory
+    label: "Load full conversation history"
+
+  - type: read
+    from: build_context
+    to: procedural_memory
+    label: "Load skill definitions"
+
+  - type: write
+    from: append
+    to: working_memory
+    label: "Append turn to history"
+
+  - type: write
+    from: persist
+    to: episodic_memory
+    label: "Write to session transcript"
+
+  - type: read
+    from: compact
+    to: working_memory
+    label: "Read full history"
+
+  - type: write
+    from: compact
+    to: working_memory
+    label: "Replace with compacted summary"
+
+  # === Observe edges (monitoring) ===
+
+  - type: observe
+    from: hook_governance
+    to: execute
+    label: "Inject governance context"
+
+  - type: observe
+    from: hook_malware
+    to: observe
+    label: "Inject malware warning"
+
+  # === Modify edges (policies affecting behavior) ===
+
+  - type: modify
+    from: permission_policy
+    to: check_permission
+    label: "Permission rules"
+    effect: "Determines auto-approve vs prompt"
+
+  - type: modify
+    from: permission_config
+    to: check_permission
+    label: "Permission mode"
+    effect: "Sets threshold for approval prompts"
+
+  - type: modify
+    from: hooks_config
+    to: execute
+    label: "Hook scripts"
+    effect: "Pre/post tool hooks can block or inject context"
+
+  # === Human interaction ===
+
+  - type: flow
+    from: user
+    to: receive
+    label: "User message"
+    data: UserInput
+
+  - type: flow
+    from: emit_text
+    to: user
+    label: "Display response"
+
+  - type: flow
+    from: prompt_user
+    to: user
+    label: "Permission prompt"
+
+  - type: flow
+    from: user
+    to: prompt_user
+    label: "Approve/deny"
+
+# ── Schemas ─────────────────────────────────────────────────
+
+schemas:
+
+  - name: UserInput
+    description: "What the user types or triggers"
+    fields:
+      - { name: text, type: string }
+      - { name: type, type: "enum[message, file_event, slash_command]" }
+      - { name: files, type: "list<string>", optional: true }
+
+  - name: RawInput
+    description: "Normalized input ready for context assembly"
+    fields:
+      - { name: content, type: string }
+      - { name: role, type: "enum[user, system]" }
+
+  - name: ApiPayload
+    description: "The full request sent to Claude API on every call. ~9-11k tokens fixed overhead before any conversation history."
+    fields:
+      - { name: system, type: string, description: "System prompt: identity + rules + MEMORY.md + CLAUDE.md + environment + git snapshot + skills" }
+      - { name: tools, type: "list<ToolDefinition>", description: "Full JSON Schema for every tool (~4-5k tokens)" }
+      - { name: messages, type: "list<Message>", description: "Full conversation history (grows every turn)" }
+      - { name: model, type: string }
+      - { name: max_tokens, type: integer }
+    example:
+      system: "[~3-4k tokens of instructions] + [~500 tokens MEMORY.md] + [~800 tokens CLAUDE.md] + [~200 tokens git status]"
+      tools: "[30+ tools with full JSON schemas, ~4-5k tokens]"
+      messages: "[all messages + all tool results, grows unbounded until compaction]"
+
+  - name: ApiResponse
+    description: "What comes back from the Claude API"
+    fields:
+      - { name: content, type: "list<ContentBlock>" }
+      - { name: stop_reason, type: "enum[end_turn, tool_use, max_tokens]" }
+      - { name: usage, type: TokenUsage }
+
+  - name: ContentBlock
+    description: "A single block in the API response"
+    fields:
+      - { name: type, type: "enum[text, tool_use, thinking]" }
+      - { name: text, type: string, optional: true }
+      - { name: tool_name, type: string, optional: true }
+      - { name: tool_input, type: object, optional: true }
+      - { name: id, type: string, optional: true }
+
+  - name: ParsedResponse
+    description: "API response split into text and tool calls"
+    fields:
+      - { name: text_blocks, type: "list<string>" }
+      - { name: tool_calls, type: "list<ToolCall>" }
+
+  - name: ToolCall
+    description: "A single tool invocation"
+    fields:
+      - { name: id, type: string }
+      - { name: tool_name, type: string }
+      - { name: input, type: object }
+
+  - name: ToolCalls
+    description: "Set of tool invocations to execute (possibly in parallel)"
+    fields:
+      - { name: calls, type: "list<ToolCall>" }
+
+  - name: ToolResults
+    description: "Results from tool execution, possibly with hook injections"
+    fields:
+      - { name: results, type: "list<ToolResult>" }
+
+  - name: ToolResult
+    description: "A single tool result"
+    fields:
+      - { name: tool_call_id, type: string }
+      - { name: content, type: string }
+      - { name: system_reminders, type: "list<string>", description: "Hook-injected context (governance, malware warnings, quiz)" }
+
+  - name: ObservedResults
+    description: "Tool results after hook processing"
+    fields:
+      - { name: results, type: "list<ToolResult>" }
+      - { name: hook_injections, type: "list<SystemReminder>" }
+
+  - name: SystemReminder
+    description: "Context injected by hooks into tool results"
+    fields:
+      - { name: source, type: "enum[governance, malware_check, edit_constraint, post_edit_quiz, file_modification, task_nudge]" }
+      - { name: content, type: string }
+      - { name: show_user, type: boolean, default: false }
+
+  - name: ConversationHistory
+    description: "The full conversation state"
+    fields:
+      - { name: messages, type: "list<Message>" }
+      - { name: token_count, type: integer }
+
+  - name: Message
+    description: "A single message in the conversation"
+    fields:
+      - { name: role, type: "enum[user, assistant, tool]" }
+      - { name: content, type: "string | list<ContentBlock>" }
+      - { name: tool_call_id, type: string, optional: true }
+
+  - name: CompactedHistory
+    description: "Conversation after context compression"
+    fields:
+      - { name: summary, type: string, description: "~2000 word summary of compressed messages" }
+      - { name: recent_messages, type: "list<Message>", description: "Most recent messages kept verbatim" }
+      - { name: transcript_path, type: string, description: "Path to full .jsonl log" }
+
+  - name: MemoryEntry
+    description: "Content in MEMORY.md"
+    fields:
+      - { name: content, type: string, description: "Markdown content, max 200 lines in system prompt" }
+
+  - name: TranscriptEntry
+    description: "A line in the session .jsonl log"
+    fields:
+      - { name: timestamp, type: datetime }
+      - { name: type, type: "enum[user, assistant, tool_call, tool_result, system]" }
+      - { name: content, type: object }
+
+  - name: GitStatus
+    description: "Git state captured at session start (stale)"
+    fields:
+      - { name: branch, type: string }
+      - { name: main_branch, type: string }
+      - { name: status, type: string }
+      - { name: recent_commits, type: "list<string>" }
+
+  - name: TokenUsage
+    description: "Token counts from API response"
+    fields:
+      - { name: input_tokens, type: integer }
+      - { name: output_tokens, type: integer }
+
+  - name: BashInput
+    fields:
+      - { name: command, type: string }
+      - { name: description, type: string, optional: true }
+      - { name: timeout, type: integer, optional: true }
+
+  - name: BashOutput
+    fields:
+      - { name: stdout, type: string }
+      - { name: stderr, type: string }
+      - { name: exit_code, type: integer }
+
+  - name: ReadInput
+    fields:
+      - { name: file_path, type: string }
+      - { name: offset, type: integer, optional: true }
+      - { name: limit, type: integer, optional: true }
+
+  - name: FileContent
+    fields:
+      - { name: content, type: string }
+      - { name: line_count, type: integer }
+
+  - name: WriteInput
+    fields:
+      - { name: file_path, type: string }
+      - { name: content, type: string }
+
+  - name: WriteResult
+    fields:
+      - { name: success, type: boolean }
+      - { name: path, type: string }
+
+  - name: EditInput
+    fields:
+      - { name: file_path, type: string }
+      - { name: old_string, type: string }
+      - { name: new_string, type: string }
+      - { name: replace_all, type: boolean, optional: true }
+
+  - name: EditResult
+    fields:
+      - { name: success, type: boolean }
+      - { name: replacements, type: integer }
+
+  - name: GlobInput
+    fields:
+      - { name: pattern, type: string }
+      - { name: path, type: string, optional: true }
+
+  - name: FileList
+    fields:
+      - { name: files, type: "list<string>" }
+
+  - name: GrepInput
+    fields:
+      - { name: pattern, type: string }
+      - { name: path, type: string, optional: true }
+      - { name: output_mode, type: "enum[content, files_with_matches, count]", optional: true }
+
+  - name: SearchResults
+    fields:
+      - { name: matches, type: "list<SearchMatch>" }
+
+  - name: SearchMatch
+    fields:
+      - { name: file, type: string }
+      - { name: line, type: integer, optional: true }
+      - { name: content, type: string, optional: true }
+
+  - name: WebFetchInput
+    fields:
+      - { name: url, type: string }
+      - { name: prompt, type: string }
+
+  - name: WebSearchInput
+    fields:
+      - { name: query, type: string }
+
+  - name: WebContent
+    fields:
+      - { name: content, type: string }
+
+  - name: TaskInput
+    description: "Input to sub-agent spawning"
+    fields:
+      - { name: prompt, type: string }
+      - { name: subagent_type, type: "enum[Bash, general-purpose, Explore, Plan, claude-code-guide]" }
+      - { name: model, type: string, optional: true }
+      - { name: max_turns, type: integer, optional: true }
+      - { name: run_in_background, type: boolean, optional: true }
+
+  - name: TaskOutput
+    fields:
+      - { name: result, type: string }
+      - { name: agent_id, type: string }
+
+  - name: NotebookEditInput
+    fields:
+      - { name: notebook_path, type: string }
+      - { name: new_source, type: string }
+      - { name: cell_type, type: "enum[code, markdown]", optional: true }
+      - { name: edit_mode, type: "enum[replace, insert, delete]", optional: true }
+
+  - name: NotebookEditResult
+    fields:
+      - { name: success, type: boolean }
+
+  - name: ToolDefinition
+    description: "JSON Schema definition of a tool (sent with every API call)"
+    fields:
+      - { name: name, type: string }
+      - { name: description, type: string }
+      - { name: parameters, type: object, description: "JSON Schema" }

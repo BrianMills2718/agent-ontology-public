@@ -1,0 +1,631 @@
+# ═══════════════════════════════════════════════════════════════
+# Self-Improver Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# An agent that reads an agent spec, analyzes it for weaknesses,
+# proposes structural mutations, validates them, and outputs the
+# improved spec. Proves the "self-legible architecture" pillar:
+# an agent reasoning about and modifying agent architecture.
+
+name: "Self Improver"
+version: "1.0"
+description: "Reads an agent spec YAML, analyzes it for structural weaknesses (lint warnings, missing patterns, complexity issues), proposes mutations, validates the result, and outputs an improved spec."
+entry_point: receive_spec
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: analyst
+    type: agent
+    label: "Architecture Analyst"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an expert AI agent architect. Given a YAML agent spec and analysis results
+      (lint warnings, verification issues, detected patterns, complexity metrics), identify
+      the most impactful improvement to make. Consider:
+      - Fixing lint warnings (dead stores, schema mismatches, unbounded loops)
+      - Adding missing patterns (e.g., adding a critique step, error handling)
+      - Simplifying over-complex structures
+      - Improving data flow (adding missing read/write edges)
+
+      Output JSON with:
+      - "diagnosis" (string): What is the primary weakness
+      - "improvement_type" (string): One of: add_review_step, add_store, change_gate_condition,
+        modify_prompt, swap_pattern, insert_pattern, remove_process, change_model
+      - "improvement_details" (string): Specific description of the change
+      - "expected_benefit" (string): Why this improves the agent
+      - "risk" (string): What could go wrong
+    input_schema: AnalystInput
+    output_schema: AnalystOutput
+
+  - id: mutator
+    type: agent
+    label: "Spec Mutator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a precise YAML spec editor. Given an agent spec (as YAML text), an improvement
+      type, and improvement details, apply the mutation to produce a modified spec.
+
+      Rules:
+      - Preserve the YAML structure (entities, processes, edges, schemas sections)
+      - Every new entity/process must be connected via edges
+      - Every schema referenced must be defined
+      - Gate conditions must reference fields that exist in upstream schemas
+      - Do NOT remove the entry_point process
+      - Do NOT break existing flow chains — add to them
+
+      Output JSON with:
+      - "mutated_spec_yaml" (string): The complete modified YAML spec
+      - "changes_summary" (string): What was changed and why
+      - "processes_added" (list of strings): IDs of any new processes
+      - "processes_removed" (list of strings): IDs of any removed processes
+    input_schema: MutatorInput
+    output_schema: MutatorOutput
+
+  - id: evaluator
+    type: agent
+    label: "Improvement Evaluator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a quality evaluator for agent architecture changes. Compare the original
+      spec analysis with the mutated spec analysis and determine if the mutation improved
+      the architecture. Consider:
+      - Were lint warnings reduced?
+      - Were verification issues fixed?
+      - Did complexity change appropriately?
+      - Were any new issues introduced?
+
+      Output JSON with:
+      - "improved" (boolean): Is the mutation an improvement overall?
+      - "score_delta" (integer): Change in quality score (-10 to +10)
+      - "warnings_fixed" (integer): Number of lint warnings eliminated
+      - "warnings_introduced" (integer): Number of new warnings
+      - "reasoning" (string): Explanation of your assessment
+    input_schema: EvaluatorInput
+    output_schema: EvaluatorOutput
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_spec
+    type: step
+    label: "Receive Spec"
+    description: "Load the target spec and initialize improvement state"
+    data_out: SpecInput
+    logic: |
+      state.data["improvement_round"] = 0
+      state.data["max_rounds"] = state.data.get("max_rounds", 2)
+      state.data["improvements_made"] = []
+      state.data["original_spec_yaml"] = state.data.get("spec_yaml", "")
+      state.data["current_spec_yaml"] = state.data["original_spec_yaml"]
+      print(f"    Loaded spec ({len(state.data['current_spec_yaml'])} chars)")
+
+  - id: analyze_spec
+    type: step
+    label: "Analyze Spec"
+    description: "Run lint, verify, and pattern detection on the current spec"
+    data_out: AnalysisResult
+    logic: |
+      import yaml as _yaml
+      import tempfile, os
+      spec_yaml = state.data.get("current_spec_yaml", "")
+      # Write spec to temp file for analysis tools
+      tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+      tmp.write(spec_yaml)
+      tmp.close()
+      tmp_path = tmp.name
+      try:
+          # Parse the spec
+          spec = _yaml.safe_load(spec_yaml)
+          state.data["spec_name"] = spec.get("name", "unknown")
+          # Run lint
+          try:
+              from agent_ontology.lint import lint_spec
+              lint_results = lint_spec(spec)
+              state.data["lint_warnings"] = [{"rule": r.code, "severity": r.severity, "message": r.message} for r in lint_results]
+              print(f"    Lint: {len(lint_results)} warnings")
+          except Exception as e:
+              state.data["lint_warnings"] = []
+              print(f"    Lint failed: {e}")
+          # Run verify
+          try:
+              from agent_ontology.verify import verify_spec
+              passes, failures = verify_spec(spec, spec_path=tmp_path)
+              state.data["verify_issues"] = [{"check": f, "status": "fail"} for f in failures]
+              print(f"    Verify: {len(failures)} issues, {len(passes)} passed")
+          except Exception as e:
+              state.data["verify_issues"] = []
+              print(f"    Verify failed: {e}")
+          # Detect patterns
+          try:
+              from agent_ontology.patterns import detect_patterns
+              patterns = detect_patterns(spec)
+              state.data["detected_patterns"] = list(patterns.keys()) if isinstance(patterns, dict) else patterns
+              print(f"    Patterns: {state.data['detected_patterns']}")
+          except Exception as e:
+              state.data["detected_patterns"] = []
+              print(f"    Pattern detection failed: {e}")
+          # Count entities/processes/edges
+          state.data["entity_count"] = len(spec.get("entities", []))
+          state.data["process_count"] = len(spec.get("processes", []))
+          state.data["edge_count"] = len(spec.get("edges", []))
+          state.data["schema_count"] = len(spec.get("schemas", []))
+      finally:
+          os.unlink(tmp_path)
+
+  - id: diagnose
+    type: step
+    label: "Diagnose Weaknesses"
+    description: "Use the analyst agent to identify the most impactful improvement"
+    data_in: AnalystInput
+    data_out: AnalystOutput
+    logic: |
+      round_num = state.data.get("improvement_round", 0)
+      print(f"    Round {round_num + 1}: Diagnosing weaknesses...")
+      lint_count = len(state.data.get("lint_warnings", []))
+      verify_issues = len([v for v in state.data.get("verify_issues", []) if v.get("status") != "pass"])
+      print(f"    {lint_count} lint warnings, {verify_issues} verify issues")
+
+  - id: check_needs_improvement
+    type: gate
+    label: "Needs improvement?"
+    condition: "improvement_type is not empty"
+    branches:
+      - condition: "has improvement to make"
+        target: mutate_spec
+      - condition: "no improvement needed"
+        target: finalize
+
+  - id: mutate_spec
+    type: step
+    label: "Mutate Spec"
+    description: "Apply the proposed mutation to the spec"
+    data_in: MutatorInput
+    data_out: MutatorOutput
+    logic: |
+      improvement = state.data.get("improvement_type", "unknown")
+      details = state.data.get("improvement_details", "")
+      print(f"    Applying mutation: {improvement}")
+      print(f"    Details: {details[:100]}")
+
+  - id: extract_mutated_yaml
+    type: step
+    label: "Extract Mutated YAML"
+    description: "Extract the mutated YAML from the mutator response, handling JSON parsing edge cases"
+    logic: |
+      import re as _re, json as _json
+      mutated = state.data.get("mutated_spec_yaml", "")
+      if not mutated.strip():
+          raw = state.data.get("raw", "")
+          if raw:
+              # Try full JSON parse of the raw response
+              try:
+                  parsed = _json.loads(raw)
+                  if isinstance(parsed, dict) and parsed.get("mutated_spec_yaml"):
+                      mutated = parsed["mutated_spec_yaml"]
+                      state.data["mutated_spec_yaml"] = mutated
+                      print(f"    Parsed mutated YAML from JSON ({len(mutated)} chars)")
+              except _json.JSONDecodeError:
+                  pass
+          if not mutated.strip() and raw:
+              # Try regex extraction from JSON-escaped string
+              m = _re.search(r'"mutated_spec_yaml"\s*:\s*"', raw)
+              if m:
+                  start = m.end()
+                  # Walk forward to find unescaped closing quote
+                  i = start
+                  while i < len(raw):
+                      if raw[i] == '\\' and i + 1 < len(raw):
+                          i += 2
+                          continue
+                      if raw[i] == '"':
+                          break
+                      i += 1
+                  yaml_escaped = raw[start:i]
+                  mutated = yaml_escaped.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace('\\\\', '\\')
+                  state.data["mutated_spec_yaml"] = mutated
+                  print(f"    Extracted YAML via regex ({len(mutated)} chars)")
+          if not mutated.strip():
+              print(f"    Could not extract mutated YAML (raw len={len(state.data.get('raw', ''))})")
+      else:
+          print(f"    Mutated YAML already present ({len(mutated)} chars)")
+
+  - id: validate_mutation
+    type: step
+    label: "Validate Mutation"
+    description: "Check if the mutated spec is valid YAML and passes validation"
+    data_out: ValidationResult
+    logic: |
+      import yaml as _yaml
+      import tempfile, os
+      mutated_yaml = state.data.get("mutated_spec_yaml", "")
+      state.data["mutation_valid"] = False
+      state.data["validation_errors"] = []
+      if not mutated_yaml.strip():
+          state.data["validation_errors"] = ["Empty spec"]
+          print("    Mutation produced empty spec")
+      else:
+          try:
+              spec = _yaml.safe_load(mutated_yaml)
+              if not isinstance(spec, dict):
+                  state.data["validation_errors"] = ["Not a valid YAML dict"]
+                  print("    Invalid YAML structure")
+              elif "entities" not in spec or "processes" not in spec:
+                  state.data["validation_errors"] = ["Missing entities or processes"]
+                  print("    Missing required sections")
+              else:
+                  # Write to temp and validate
+                  tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+                  tmp.write(mutated_yaml)
+                  tmp.close()
+                  try:
+                      from agent_ontology.validate import validate_spec, load_yaml
+                      ontology_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent_ontology', 'ONTOLOGY.yaml')
+                      if not os.path.exists(ontology_path):
+                          import agent_ontology
+                          ontology_path = os.path.join(os.path.dirname(agent_ontology.__file__), 'ONTOLOGY.yaml')
+                      ontology = load_yaml(ontology_path)
+                      errors, warnings = validate_spec(spec, ontology, tmp.name)
+                      state.data["validation_errors"] = errors
+                      if errors:
+                          print(f"    Validation: {len(errors)} errors")
+                      else:
+                          state.data["mutation_valid"] = True
+                          print("    Validation: PASS")
+                  except Exception as e:
+                      state.data["validation_errors"] = [str(e)]
+                      print(f"    Validation failed: {e}")
+                  finally:
+                      os.unlink(tmp.name)
+          except _yaml.YAMLError as e:
+              state.data["validation_errors"] = [f"YAML parse error: {e}"]
+              print(f"    YAML parse error: {e}")
+
+  - id: check_valid
+    type: gate
+    label: "Mutation valid?"
+    condition: "mutation_valid == True"
+    branches:
+      - condition: "valid mutation"
+        target: reanalyze
+      - condition: "invalid mutation"
+        target: handle_invalid
+
+  - id: handle_invalid
+    type: step
+    label: "Handle Invalid Mutation"
+    description: "Record the failure and decide whether to retry or give up"
+    logic: |
+      errors = state.data.get("validation_errors", [])
+      print(f"    Mutation invalid: {errors[:2]}")
+      # Skip this improvement, move to finalize
+      state.data["improvement_round"] = state.data.get("max_rounds", 2)
+      state.data["_skip_to_finalize"] = True
+
+  - id: reanalyze
+    type: step
+    label: "Re-analyze Mutated Spec"
+    description: "Run analysis on the mutated spec to compare with original"
+    logic: |
+      import yaml as _yaml
+      import tempfile, os
+      mutated_yaml = state.data.get("mutated_spec_yaml", "")
+      tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+      tmp.write(mutated_yaml)
+      tmp.close()
+      try:
+          spec = _yaml.safe_load(mutated_yaml)
+          # Run lint on mutated spec
+          try:
+              from agent_ontology.lint import lint_spec
+              new_lint = lint_spec(spec)
+              state.data["new_lint_warnings"] = [{"rule": r.code, "severity": r.severity, "message": r.message} for r in new_lint]
+              print(f"    New lint: {len(new_lint)} warnings (was {len(state.data.get('lint_warnings', []))})")
+          except Exception:
+              state.data["new_lint_warnings"] = []
+          # Run verify on mutated spec
+          try:
+              from agent_ontology.verify import verify_spec
+              passes, failures = verify_spec(spec, spec_path=tmp.name)
+              state.data["new_verify_issues"] = [{"check": f, "status": "fail"} for f in failures]
+          except Exception:
+              state.data["new_verify_issues"] = []
+          state.data["new_entity_count"] = len(spec.get("entities", []))
+          state.data["new_process_count"] = len(spec.get("processes", []))
+          state.data["new_edge_count"] = len(spec.get("edges", []))
+      finally:
+          os.unlink(tmp.name)
+
+  - id: evaluate
+    type: step
+    label: "Evaluate Improvement"
+    description: "Compare original and mutated analyses to judge improvement"
+    data_in: EvaluatorInput
+    data_out: EvaluatorOutput
+    logic: |
+      print(f"    Evaluating improvement quality...")
+
+  - id: check_improved
+    type: gate
+    label: "Improvement accepted?"
+    condition: "improved == True"
+    branches:
+      - condition: "improvement accepted"
+        target: accept_improvement
+      - condition: "improvement rejected"
+        target: reject_improvement
+
+  - id: accept_improvement
+    type: step
+    label: "Accept Improvement"
+    description: "Apply the accepted mutation as the new current spec"
+    logic: |
+      state.data["current_spec_yaml"] = state.data.get("mutated_spec_yaml", state.data.get("current_spec_yaml", ""))
+      improvement = {
+          "round": state.data.get("improvement_round", 0) + 1,
+          "type": state.data.get("improvement_type", ""),
+          "details": state.data.get("improvement_details", ""),
+          "score_delta": state.data.get("score_delta", 0),
+      }
+      improvements = state.data.get("improvements_made", [])
+      improvements.append(improvement)
+      state.data["improvements_made"] = improvements
+      state.data["improvement_round"] = state.data.get("improvement_round", 0) + 1
+      print(f"    Accepted: {improvement['type']} (delta: {improvement['score_delta']:+d})")
+
+  - id: reject_improvement
+    type: step
+    label: "Reject Improvement"
+    description: "Discard the mutation and increment the round counter"
+    logic: |
+      state.data["improvement_round"] = state.data.get("improvement_round", 0) + 1
+      print(f"    Rejected improvement (round {state.data['improvement_round']})")
+
+  - id: check_rounds_remaining
+    type: gate
+    label: "More rounds?"
+    condition: "improvement_round < max_rounds"
+    branches:
+      - condition: "rounds remaining"
+        target: analyze_spec
+      - condition: "max rounds reached"
+        target: finalize
+
+  - id: finalize
+    type: step
+    label: "Finalize"
+    description: "Produce the final improved spec with improvement summary"
+    data_out: FinalResult
+    logic: |
+      improvements = state.data.get("improvements_made", [])
+      original_len = len(state.data.get("original_spec_yaml", ""))
+      current_len = len(state.data.get("current_spec_yaml", ""))
+      print(f"    Finalized: {len(improvements)} improvements applied")
+      print(f"    Spec size: {original_len} -> {current_len} chars")
+      state.data["final_spec_yaml"] = state.data.get("current_spec_yaml", "")
+      state.data["total_improvements"] = len(improvements)
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  # Main flow
+  - type: flow
+    from: receive_spec
+    to: analyze_spec
+    label: "Start analysis"
+
+  - type: flow
+    from: analyze_spec
+    to: diagnose
+    label: "Send analysis to analyst"
+
+  - type: invoke
+    from: diagnose
+    to: analyst
+    label: "Diagnose weaknesses"
+    input: AnalystInput
+    output: AnalystOutput
+
+  - type: flow
+    from: diagnose
+    to: check_needs_improvement
+    label: "Check if improvement needed"
+
+  # Improvement branch
+  - type: branch
+    from: check_needs_improvement
+    to: mutate_spec
+    condition: "has improvement to make"
+
+  - type: branch
+    from: check_needs_improvement
+    to: finalize
+    condition: "no improvement needed"
+
+  - type: invoke
+    from: mutate_spec
+    to: mutator
+    label: "Apply mutation"
+    input: MutatorInput
+    output: MutatorOutput
+
+  - type: flow
+    from: mutate_spec
+    to: extract_mutated_yaml
+    label: "Process mutation result"
+
+  - type: flow
+    from: extract_mutated_yaml
+    to: validate_mutation
+    label: "Validate result"
+
+  # Validation gate
+  - type: branch
+    from: check_valid
+    to: reanalyze
+    condition: "valid mutation"
+
+  - type: branch
+    from: check_valid
+    to: handle_invalid
+    condition: "invalid mutation"
+
+  - type: flow
+    from: validate_mutation
+    to: check_valid
+    label: "Check validity"
+
+  - type: flow
+    from: handle_invalid
+    to: finalize
+    label: "Give up on invalid mutation"
+
+  # Re-analysis and evaluation
+  - type: flow
+    from: reanalyze
+    to: evaluate
+    label: "Compare analyses"
+
+  - type: invoke
+    from: evaluate
+    to: evaluator
+    label: "Evaluate improvement"
+    input: EvaluatorInput
+    output: EvaluatorOutput
+
+  - type: flow
+    from: evaluate
+    to: check_improved
+    label: "Check evaluation"
+
+  # Accept/reject branches
+  - type: branch
+    from: check_improved
+    to: accept_improvement
+    condition: "improvement accepted"
+
+  - type: branch
+    from: check_improved
+    to: reject_improvement
+    condition: "improvement rejected"
+
+  - type: flow
+    from: accept_improvement
+    to: check_rounds_remaining
+    label: "Check for more rounds"
+
+  - type: flow
+    from: reject_improvement
+    to: check_rounds_remaining
+    label: "Check for more rounds"
+
+  # Loop back
+  - type: branch
+    from: check_rounds_remaining
+    to: analyze_spec
+    condition: "rounds remaining"
+
+  - type: branch
+    from: check_rounds_remaining
+    to: finalize
+    condition: "max rounds reached"
+
+  - type: loop
+    from: check_rounds_remaining
+    to: analyze_spec
+    label: "Improvement loop"
+    condition: "improvement_round < max_rounds"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: SpecInput
+    description: "The spec to improve"
+    fields:
+      - { name: spec_yaml, type: string }
+      - { name: max_rounds, type: integer }
+
+  - name: AnalysisResult
+    description: "Results of analyzing a spec"
+    fields:
+      - { name: lint_warnings, type: "list<object>" }
+      - { name: verify_issues, type: "list<object>" }
+      - { name: detected_patterns, type: "list<string>" }
+      - { name: entity_count, type: integer }
+      - { name: process_count, type: integer }
+      - { name: edge_count, type: integer }
+      - { name: schema_count, type: integer }
+
+  - name: AnalystInput
+    description: "Input to the architecture analyst"
+    fields:
+      - { name: spec_yaml, type: string }
+      - { name: spec_name, type: string }
+      - { name: lint_warnings, type: "list<object>" }
+      - { name: verify_issues, type: "list<object>" }
+      - { name: detected_patterns, type: "list<string>" }
+      - { name: entity_count, type: integer }
+      - { name: process_count, type: integer }
+      - { name: improvements_made, type: "list<object>" }
+
+  - name: AnalystOutput
+    description: "Diagnosis and proposed improvement"
+    fields:
+      - { name: diagnosis, type: string }
+      - { name: improvement_type, type: string }
+      - { name: improvement_details, type: string }
+      - { name: expected_benefit, type: string }
+      - { name: risk, type: string }
+
+  - name: MutatorInput
+    description: "Input to the spec mutator"
+    fields:
+      - { name: current_spec_yaml, type: string }
+      - { name: improvement_type, type: string }
+      - { name: improvement_details, type: string }
+      - { name: diagnosis, type: string }
+
+  - name: MutatorOutput
+    description: "The mutated spec"
+    fields:
+      - { name: mutated_spec_yaml, type: string }
+      - { name: changes_summary, type: string }
+      - { name: processes_added, type: "list<string>" }
+      - { name: processes_removed, type: "list<string>" }
+
+  - name: ValidationResult
+    description: "Validation results for the mutated spec"
+    fields:
+      - { name: mutation_valid, type: boolean }
+      - { name: validation_errors, type: "list<string>" }
+
+  - name: EvaluatorInput
+    description: "Input to the improvement evaluator"
+    fields:
+      - { name: diagnosis, type: string }
+      - { name: improvement_type, type: string }
+      - { name: changes_summary, type: string }
+      - { name: lint_warnings, type: "list<object>" }
+      - { name: new_lint_warnings, type: "list<object>" }
+      - { name: verify_issues, type: "list<object>" }
+      - { name: new_verify_issues, type: "list<object>" }
+
+  - name: EvaluatorOutput
+    description: "Evaluation of the improvement"
+    fields:
+      - { name: improved, type: boolean }
+      - { name: score_delta, type: integer }
+      - { name: warnings_fixed, type: integer }
+      - { name: warnings_introduced, type: integer }
+      - { name: reasoning, type: string }
+
+  - name: FinalResult
+    description: "The improved spec with summary"
+    fields:
+      - { name: final_spec_yaml, type: string }
+      - { name: total_improvements, type: integer }
+      - { name: improvements_made, type: "list<object>" }

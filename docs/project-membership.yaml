@@ -1,0 +1,14 @@
+schema_version: 1.1.0
+project_id: project-agent-ontology
+display_name: Agent Ontology
+context_epoch: 1
+revision_policy: {development: moving_checkout, evidence: exact_revision}
+repositories:
+  - repository_id: agent_ontology
+    role: primary
+    workspace: default
+    authority_entrypoints: [AGENTS.md, README.md, ROADMAP.md]
+    contract_seams: []
+wiki:
+  repository_id: agent_ontology
+  path: wiki/index.md

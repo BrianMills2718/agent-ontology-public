@@ -1,0 +1,61 @@
+{
+  "fixtures": [
+    {
+      "id": "codex_write_file_deterministic",
+      "tags": ["ci", "deterministic", "codex"],
+      "spec_path": "agent_ontology/specs/codex.yaml",
+      "text": "Use the write_file tool to create ci_calculator.py with a tiny Python calculator and finish.",
+      "mock_mode": "deterministic",
+      "capability_profile": "restricted",
+      "model_override": "openrouter/deepseek/deepseek-chat",
+      "no_judge": true,
+      "timeout_seconds": 180,
+      "assertions": {
+        "expect_ok": true,
+        "min_event_counts": {
+          "completed": 1,
+          "step_diff": 1,
+          "file_diff": 1
+        }
+      }
+    },
+    {
+      "id": "autogpt_external_semantic_search_deterministic",
+      "tags": ["ci", "deterministic", "external", "autogpt"],
+      "spec_path": "agent_ontology/specs/autogpt.yaml",
+      "text": "Research deterministic mocks and summarize key points using semantic retrieval.",
+      "mock_mode": "deterministic",
+      "capability_profile": "external_enabled",
+      "model_override": "openrouter/deepseek/deepseek-chat",
+      "no_judge": true,
+      "timeout_seconds": 180,
+      "assertions": {
+        "expect_ok": true,
+        "min_process_counts": {
+          "execute_external_call": 1
+        },
+        "min_executor_external_calls": 1,
+        "require_executor_interfaces": ["semantic_search"]
+      }
+    },
+    {
+      "id": "autogpt_external_mcp_call_deterministic",
+      "tags": ["ci", "deterministic", "external", "autogpt", "mcp"],
+      "spec_path": "agent_ontology/specs/autogpt.yaml",
+      "text": "Research deterministic mock behavior via MCP search and summarize findings. Prefer mcp_call.",
+      "mock_mode": "deterministic",
+      "capability_profile": "external_enabled",
+      "model_override": "openrouter/deepseek/deepseek-chat",
+      "no_judge": true,
+      "timeout_seconds": 180,
+      "assertions": {
+        "expect_ok": true,
+        "min_process_counts": {
+          "execute_external_call": 1
+        },
+        "min_executor_external_calls": 1,
+        "require_executor_interfaces": ["mcp_call"]
+      }
+    }
+  ]
+}

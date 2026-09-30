@@ -1,0 +1,142 @@
+name: MultiDoc Structured
+version: "1.0"
+description: >
+  Multi-step document reasoning agent with explicit extraction,
+  cross-checking, and verification stages. Designed to outperform
+  single-shot on questions requiring contradiction detection,
+  arithmetic aggregation, and multi-source reasoning.
+entry_point: receive_query
+entities:
+  - id: extractor
+    type: agent
+    label: Fact Extractor
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a fact extraction assistant. Given a set of fact cards and a question,
+      extract ONLY the specific facts relevant to answering the question.
+
+      For each relevant fact, note:
+      - The source card ID (A, B, C, etc.)
+      - The specific fact or number
+      - Any caveats (e.g., "self-reported", "according to audit", "before/after event")
+
+      If two sources contradict each other, extract BOTH facts and flag the contradiction.
+
+      Output as JSON: {"extracted_facts": [{"source": "A", "fact": "...", "caveat": "..."}],
+      "contradictions": [{"fact1_source": "A", "fact2_source": "B", "description": "..."}]}
+    input_schema: ReasoningInput
+    output_schema: ExtractionOutput
+
+  - id: reasoner
+    type: agent
+    label: Reasoning Agent
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a reasoning assistant. Given extracted facts (with source IDs and caveats)
+      and a question, reason step-by-step to produce an answer.
+
+      Rules:
+      - When sources contradict, prefer independent audits/studies over self-reported data.
+      - For arithmetic: show your calculation step by step.
+      - For negation questions ("which did NOT..."): check each option systematically.
+      - For temporal questions: establish a timeline before answering.
+
+      Output as JSON: {"reasoning": "step-by-step explanation", "answer": "concise answer"}
+    input_schema: ReasoningStepInput
+    output_schema: ReasoningOutput
+
+  - id: verifier
+    type: agent
+    label: Answer Verifier
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a verification assistant. Given the original question, fact cards,
+      and a proposed answer with reasoning, verify the answer is correct.
+
+      Check:
+      1. Does the answer actually address the question asked?
+      2. Is the answer supported by the cited sources?
+      3. If arithmetic was involved, is the calculation correct?
+      4. Were any contradictions handled correctly (preferring independent sources)?
+      5. For negation questions, were all options checked?
+
+      IMPORTANT: Always output the actual answer text in the "answer" field, never "same answer".
+      If the answer is correct, output: {"verified": true, "answer": "<the actual answer>", "reasoning": "why it's correct"}
+      If incorrect, output: {"verified": false, "answer": "<corrected answer>", "reasoning": "what was wrong and the correction"}
+    input_schema: VerificationInput
+    output_schema: ReasoningOutput
+
+schemas:
+  - name: ReasoningInput
+    description: Input with context and query
+    fields:
+      - {name: context, type: string}
+      - {name: query, type: string}
+  - name: ExtractionOutput
+    description: Extracted facts with source attribution
+    fields:
+      - {name: extracted_facts, type: array}
+      - {name: contradictions, type: array}
+  - name: ReasoningStepInput
+    description: Input to the reasoning step
+    fields:
+      - {name: extracted_facts, type: array}
+      - {name: contradictions, type: array}
+      - {name: query, type: string}
+  - name: ReasoningOutput
+    description: Final answer with reasoning
+    fields:
+      - {name: answer, type: string}
+      - {name: reasoning, type: string}
+  - name: VerificationInput
+    description: Input to the verification step
+    fields:
+      - {name: context, type: string}
+      - {name: query, type: string}
+      - {name: answer, type: string}
+      - {name: reasoning, type: string}
+
+processes:
+  - id: receive_query
+    type: step
+    label: Receive Query
+    description: Accept the question and fact card context
+    data_in: ReasoningInput
+    data_out: ReasoningInput
+
+  - id: extract_facts
+    type: step
+    label: Extract Facts
+    description: Extract relevant facts from each source with attribution
+    data_in: ReasoningInput
+    data_out: ExtractionOutput
+
+  - id: reason
+    type: step
+    label: Reason
+    description: Reason step-by-step using extracted facts to produce an answer
+    data_in: ReasoningStepInput
+    data_out: ReasoningOutput
+
+  - id: verify
+    type: step
+    label: Verify Answer
+    description: Cross-check the answer against original sources
+    data_in: VerificationInput
+    data_out: ReasoningOutput
+
+  - id: emit_answer
+    type: step
+    label: Emit Answer
+    description: Return the verified final answer
+    data_in: ReasoningOutput
+    data_out: ReasoningOutput
+
+edges:
+  - {type: flow, from: receive_query, to: extract_facts}
+  - {type: invoke, from: extract_facts, to: extractor, input: ReasoningInput, output: ExtractionOutput}
+  - {type: flow, from: extract_facts, to: reason}
+  - {type: invoke, from: reason, to: reasoner, input: ReasoningStepInput, output: ReasoningOutput}
+  - {type: flow, from: reason, to: verify}
+  - {type: invoke, from: verify, to: verifier, input: VerificationInput, output: ReasoningOutput}
+  - {type: flow, from: verify, to: emit_answer}

@@ -1,0 +1,888 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ontology.dev/spec-schema.json",
+  "title": "Agent Ontology Spec",
+  "description": "Schema for validating Agent Ontology specification YAML files (ontology v0.2)",
+  "type": "object",
+  "required": ["name", "version", "entities", "processes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "name":        { "type": "string", "description": "Human-readable agent name" },
+    "version":     { "type": "string", "description": "Spec version string" },
+    "description": { "type": "string", "description": "Free-text description of what this agent does" },
+    "entry_point": { "type": "string", "description": "ID of the first process to execute" },
+    "entities":    { "type": "array", "items": { "$ref": "#/$defs/entity" }, "minItems": 1 },
+    "processes":   { "type": "array", "items": { "$ref": "#/$defs/process" }, "minItems": 1 },
+    "edges":       { "type": "array", "items": { "$ref": "#/$defs/edge" }, "minItems": 1 },
+    "schemas":     { "type": "array", "items": { "$ref": "#/$defs/schema_definition" } },
+    "metadata":    { "type": "object" },
+    "state":       { "$ref": "#/$defs/state_config" },
+    "checkpointing": { "$ref": "#/$defs/checkpointing_config" },
+    "contracts":   { "$ref": "#/$defs/contracts_config" }
+  },
+
+  "$defs": {
+
+    "entity": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "properties": {
+        "id":    { "type": "string" },
+        "type":  { "enum": ["agent", "store", "tool", "human", "config", "channel", "team", "conversation", "world_model"] },
+        "label": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "agent" } } },
+          "then": { "$ref": "#/$defs/entity_agent" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "store" } } },
+          "then": { "$ref": "#/$defs/entity_store" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "tool" } } },
+          "then": { "$ref": "#/$defs/entity_tool" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "human" } } },
+          "then": { "$ref": "#/$defs/entity_human" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "config" } } },
+          "then": { "$ref": "#/$defs/entity_config" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "channel" } } },
+          "then": { "$ref": "#/$defs/entity_channel" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "team" } } },
+          "then": { "$ref": "#/$defs/entity_team" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "conversation" } } },
+          "then": { "$ref": "#/$defs/entity_conversation" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "world_model" } } },
+          "then": { "$ref": "#/$defs/entity_world_model" }
+        }
+      ]
+    },
+
+    "entity_agent": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "id":            { "type": "string" },
+        "type":          { "const": "agent" },
+        "label":         { "type": "string" },
+        "model":         { "type": "string", "description": "LLM model identifier (e.g. gpt-4, claude-opus-4-6, gemini-3-flash-preview)" },
+        "system_prompt": { "type": "string" },
+        "tools":         { "type": "array", "items": { "type": "string" } },
+        "input_schema":  { "type": "string", "description": "Schema name for expected input" },
+        "output_schema": { "type": "string", "description": "Schema name for expected output" },
+        "description":   { "type": "string" },
+        "config":        { "type": "object" },
+        "subgraph":      { "type": "string", "description": "Reference to another spec for recursive composition" }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_store": {
+      "type": "object",
+      "required": ["store_type"],
+      "properties": {
+        "id":         { "type": "string" },
+        "type":       { "const": "store" },
+        "label":      { "type": "string" },
+        "store_type":   { "enum": ["vector", "file", "kv", "queue", "relational", "blackboard", "knowledge_graph", "ontology", "logic_program", "pddl_domain"] },
+        "schema":       { "type": "string" },
+        "description":  { "type": "string" },
+        "retention":    { "enum": ["ephemeral", "session", "persistent"], "default": "persistent" },
+        "access":       { "enum": ["read", "write", "readwrite"], "default": "readwrite" },
+        "config":       { "type": "object" },
+        "reasoner":     { "enum": ["z3", "hermit", "pellet", "clingo", "fast_downward", "prolog", "none"] },
+        "formalism":    { "enum": ["owl", "fol", "description_logic", "horn_clauses", "datalog", "sparql", "cypher", "pddl", "none"] },
+        "embedding_config": {
+          "type": "object",
+          "properties": {
+            "model":      { "type": "string", "description": "Embedding model identifier (e.g. text-embedding-3-small)" },
+            "provider":   { "enum": ["openai", "google", "huggingface", "local"], "default": "openai" },
+            "dimensions": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_tool": {
+      "type": "object",
+      "required": ["tool_type"],
+      "properties": {
+        "id":            { "type": "string" },
+        "type":          { "const": "tool" },
+        "label":         { "type": "string" },
+        "description":   { "type": "string" },
+        "tool_type":     { "enum": ["api", "function", "browser", "shell", "mcp", "composite"] },
+        "input_schema":  { "type": "string" },
+        "output_schema": { "type": "string" },
+        "side_effects":  { "type": "array", "items": { "type": "string" } },
+        "idempotent":    { "type": "boolean", "default": false },
+        "auth_required": { "type": "boolean", "default": false },
+        "config":        { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_human": {
+      "type": "object",
+      "properties": {
+        "id":    { "type": "string" },
+        "type":  { "const": "human" },
+        "label": { "type": "string" },
+        "role":  { "enum": ["user", "reviewer", "admin", "operator"] }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_config": {
+      "type": "object",
+      "properties": {
+        "id":     { "type": "string" },
+        "type":   { "const": "config" },
+        "label":  { "type": "string" },
+        "values": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_channel": {
+      "type": "object",
+      "required": ["channel_type"],
+      "properties": {
+        "id":             { "type": "string" },
+        "type":           { "const": "channel" },
+        "label":          { "type": "string" },
+        "channel_type":   { "enum": ["topic", "queue", "broadcast", "request_reply"] },
+        "message_schema": { "type": "string" },
+        "retention":      { "enum": ["none", "last", "all", "windowed"], "default": "all" },
+        "reducer":        { "enum": ["append", "replace", "merge", "custom"], "default": "append" },
+        "buffer_size":    { "oneOf": [{ "type": "integer", "minimum": 0 }, { "const": "unbounded" }], "default": "unbounded" }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_team": {
+      "type": "object",
+      "required": ["members", "strategy"],
+      "properties": {
+        "id":                { "type": "string" },
+        "type":              { "const": "team" },
+        "label":             { "type": "string" },
+        "members":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "strategy":          { "enum": ["sequential", "hierarchical", "consensus", "round_robin", "dynamic"] },
+        "manager":           { "type": "string" },
+        "delegation":        { "type": "boolean", "default": false },
+        "speaker_selection": { "enum": ["round_robin", "llm_based", "priority", "random", "custom"] },
+        "max_rounds":        { "type": "integer", "minimum": 1 },
+        "termination":       { "$ref": "#/$defs/termination_condition" }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_conversation": {
+      "type": "object",
+      "properties": {
+        "id":             { "type": "string" },
+        "type":           { "const": "conversation" },
+        "label":          { "type": "string" },
+        "participants":   { "type": "array", "items": { "type": "string" } },
+        "history_schema": { "type": "string" },
+        "max_turns":      { "type": "integer", "minimum": 1 },
+        "persistence":    { "enum": ["ephemeral", "session", "persistent"], "default": "session" },
+        "nesting":        { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "entity_world_model": {
+      "type": "object",
+      "required": ["model_type"],
+      "properties": {
+        "id":                  { "type": "string" },
+        "type":                { "const": "world_model" },
+        "label":               { "type": "string" },
+        "description":         { "type": "string" },
+        "model_type":          { "enum": ["llm_simulated", "learned", "hand_coded", "physics_engine"] },
+        "state_schema":        { "type": "string", "description": "Schema for world states" },
+        "action_schema":       { "type": "string", "description": "Schema for actions" },
+        "transition_function": { "type": "string", "description": "Reference to transition function T(s'|s,a)" },
+        "reward_function":     { "type": "string", "description": "Reference to reward function R(s,a,s')" },
+        "deterministic":       { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "process": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "properties": {
+        "id":    { "type": "string" },
+        "type":  { "enum": ["step", "gate", "checkpoint", "spawn", "protocol", "policy", "error_handler", "symbolic_inference", "formal_translation", "search"] },
+        "label": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "step" } } },
+          "then": { "$ref": "#/$defs/process_step" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "gate" } } },
+          "then": { "$ref": "#/$defs/process_gate" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "checkpoint" } } },
+          "then": { "$ref": "#/$defs/process_checkpoint" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "spawn" } } },
+          "then": { "$ref": "#/$defs/process_spawn" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "protocol" } } },
+          "then": { "$ref": "#/$defs/process_protocol" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "policy" } } },
+          "then": { "$ref": "#/$defs/process_policy" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "error_handler" } } },
+          "then": { "$ref": "#/$defs/process_error_handler" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "symbolic_inference" } } },
+          "then": { "$ref": "#/$defs/process_symbolic_inference" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "formal_translation" } } },
+          "then": { "$ref": "#/$defs/process_formal_translation" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "search" } } },
+          "then": { "$ref": "#/$defs/process_search" }
+        }
+      ]
+    },
+
+    "process_step": {
+      "type": "object",
+      "properties": {
+        "id":             { "type": "string" },
+        "type":           { "const": "step" },
+        "label":          { "type": "string" },
+        "description":    { "type": "string" },
+        "logic":          { "type": "string", "description": "Inline Python logic block" },
+        "data_in":        { "type": "string", "description": "Input schema name" },
+        "data_out":       { "type": "string", "description": "Output schema name" },
+        "timeout":        { "oneOf": [{ "type": "string" }, { "type": "integer" }], "description": "Max execution time (e.g. '30s', '5m', or seconds as integer)" },
+        "on_error":       { "enum": ["fail", "skip", "retry", "fallback"], "default": "fail" },
+        "precondition":   { "type": "string", "description": "Condition that must hold before execution" },
+        "postcondition":  { "type": "string", "description": "Condition that must hold after execution" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_gate": {
+      "type": "object",
+      "required": ["condition", "branches"],
+      "properties": {
+        "id":          { "type": "string" },
+        "type":        { "const": "gate" },
+        "label":       { "type": "string" },
+        "description": { "type": "string" },
+        "condition":   { "type": "string", "description": "The condition being evaluated" },
+        "branches":  {
+          "type": "array",
+          "items": { "$ref": "#/$defs/gate_branch" },
+          "minItems": 2
+        },
+        "logic":     { "type": "string", "description": "Optional pre-evaluation logic block" },
+        "default":   { "type": "string", "description": "Fallback target if no branch matches" }
+      },
+      "additionalProperties": false
+    },
+
+    "gate_branch": {
+      "type": "object",
+      "required": ["condition", "target"],
+      "properties": {
+        "condition": { "type": "string" },
+        "target":    { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_checkpoint": {
+      "type": "object",
+      "required": ["prompt"],
+      "properties": {
+        "id":             { "type": "string" },
+        "type":           { "const": "checkpoint" },
+        "label":          { "type": "string" },
+        "prompt":         { "type": "string", "description": "What to show the human" },
+        "description":   { "type": "string" },
+        "timeout":        { "oneOf": [{ "type": "string" }, { "type": "integer" }] },
+        "default_action": { "enum": ["approve", "deny", "skip"] },
+        "options":        { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "process_spawn": {
+      "type": "object",
+      "required": ["template"],
+      "properties": {
+        "id":            { "type": "string" },
+        "type":          { "const": "spawn" },
+        "label":         { "type": "string" },
+        "description":   { "type": "string" },
+        "template":      { "type": "string", "description": "Agent entity ID, spec_ref, or 'self' for recursive" },
+        "cardinality":   { "oneOf": [{ "type": "integer", "minimum": 1 }, { "const": "dynamic" }], "default": 1 },
+        "determined_by": { "type": "string" },
+        "aggregation":   { "enum": ["collect", "merge", "vote", "first", "race"] },
+        "recursive":     { "type": "boolean", "default": false },
+        "max_depth":     { "oneOf": [{ "type": "integer", "minimum": 1 }, { "const": "unbounded" }], "default": "unbounded" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_protocol": {
+      "type": "object",
+      "required": ["participants", "termination"],
+      "properties": {
+        "id":           { "type": "string" },
+        "type":         { "const": "protocol" },
+        "label":        { "type": "string" },
+        "description":  { "type": "string" },
+        "participants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/protocol_participant" },
+          "minItems": 2
+        },
+        "termination":  { "$ref": "#/$defs/termination_condition" },
+        "rules":        { "type": "array", "items": { "type": "string" } },
+        "state":        { "type": "string", "description": "Schema name for shared state" },
+        "max_rounds":   { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "protocol_participant": {
+      "type": "object",
+      "required": ["entity", "role"],
+      "properties": {
+        "entity": { "type": "string" },
+        "role":   { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_policy": {
+      "type": "object",
+      "required": ["targets", "effect"],
+      "properties": {
+        "id":          { "type": "string" },
+        "type":        { "const": "policy" },
+        "label":       { "type": "string" },
+        "targets":     { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "effect":      { "enum": ["block", "warn", "modify", "log", "retry"] },
+        "condition":   { "type": "string" },
+        "rules":       { "type": "array", "items": { "type": "string" } },
+        "enforcement": { "enum": ["strict", "advisory"], "default": "strict" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_error_handler": {
+      "type": "object",
+      "required": ["scope", "on_error"],
+      "properties": {
+        "id":           { "type": "string" },
+        "type":         { "const": "error_handler" },
+        "label":        { "type": "string" },
+        "scope":        { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "on_error":     { "type": "string", "description": "Process ID to route errors to" },
+        "retry":        { "$ref": "#/$defs/retry_config" },
+        "fallback":     { "type": "string", "description": "Alternative process ID when retries exhausted" },
+        "on_finally":   { "type": "string", "description": "Process ID for cleanup (always runs)" },
+        "error_schema": { "type": "string" },
+        "timeout":      { "oneOf": [{ "type": "string" }, { "type": "integer" }] }
+      },
+      "additionalProperties": false
+    },
+
+    "process_symbolic_inference": {
+      "type": "object",
+      "required": ["engine", "formalism"],
+      "properties": {
+        "id":            { "type": "string" },
+        "type":          { "const": "symbolic_inference" },
+        "label":         { "type": "string" },
+        "description":   { "type": "string" },
+        "engine":        { "enum": ["z3", "clingo", "fast_downward", "prolog", "hermit", "pellet", "owlready", "custom"] },
+        "formalism":     { "enum": ["sat", "smt", "asp", "pddl", "horn_clauses", "description_logic", "fol", "datalog", "custom"] },
+        "query":         { "type": "string", "description": "Inference query in engine's syntax or template" },
+        "timeout":       { "oneOf": [{ "type": "string" }, { "type": "integer" }] },
+        "fallback":      { "type": "string", "description": "Process ID to route to on failure/timeout" },
+        "deterministic": { "type": "boolean", "default": true },
+        "data_in":       { "type": "string" },
+        "data_out":      { "type": "string" },
+        "logic":         { "type": "string", "description": "Setup/pre-processing logic before inference" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_formal_translation": {
+      "type": "object",
+      "required": ["source_formalism", "target_formalism"],
+      "properties": {
+        "id":               { "type": "string" },
+        "type":             { "const": "formal_translation" },
+        "label":            { "type": "string" },
+        "description":      { "type": "string" },
+        "source_formalism": { "enum": ["natural_language", "owl", "fol", "pddl", "sparql", "cypher", "python", "smtlib", "asp", "datalog", "custom"] },
+        "target_formalism": { "enum": ["natural_language", "owl", "fol", "pddl", "sparql", "cypher", "python", "smtlib", "asp", "datalog", "custom"] },
+        "translator":       { "enum": ["llm", "rule_based", "hybrid"], "default": "llm" },
+        "data_in":          { "type": "string" },
+        "data_out":         { "type": "string" },
+        "validation":       { "type": "boolean", "default": false, "description": "Whether to validate translated output" },
+        "logic":            { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "process_search": {
+      "type": "object",
+      "required": ["algorithm"],
+      "properties": {
+        "id":                  { "type": "string" },
+        "type":                { "const": "search" },
+        "label":               { "type": "string" },
+        "description":         { "type": "string" },
+        "algorithm":           { "enum": ["mcts", "beam_search", "best_first", "a_star", "iterative_deepening", "genetic", "random_sampling"] },
+        "evaluation_function": { "type": "string", "description": "Process or agent ID that evaluates candidate states" },
+        "max_iterations":      { "type": "integer", "minimum": 1 },
+        "branching_factor":    { "type": "integer", "minimum": 1 },
+        "beam_width":          { "type": "integer", "minimum": 1 },
+        "exploration_weight":  { "type": "number" },
+        "data_in":             { "type": "string" },
+        "data_out":            { "type": "string" },
+        "logic":               { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "retry_config": {
+      "type": "object",
+      "properties": {
+        "max_retries":      { "type": "integer", "minimum": 0, "default": 3 },
+        "backoff":          { "enum": ["none", "linear", "exponential"], "default": "exponential" },
+        "initial_delay_ms": { "type": "integer", "minimum": 0, "default": 1000 },
+        "max_delay_ms":     { "type": "integer", "minimum": 0, "default": 30000 },
+        "retryable_errors": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "edge": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["flow", "invoke", "loop", "branch", "read", "write", "modify", "observe", "error", "publish", "subscribe", "handoff", "verify"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "flow" } } },
+          "then": { "$ref": "#/$defs/edge_flow" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "invoke" } } },
+          "then": { "$ref": "#/$defs/edge_invoke" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "loop" } } },
+          "then": { "$ref": "#/$defs/edge_loop" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "branch" } } },
+          "then": { "$ref": "#/$defs/edge_branch" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "read" } } },
+          "then": { "$ref": "#/$defs/edge_read" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "write" } } },
+          "then": { "$ref": "#/$defs/edge_write" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "modify" } } },
+          "then": { "$ref": "#/$defs/edge_modify" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "observe" } } },
+          "then": { "$ref": "#/$defs/edge_observe" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "error" } } },
+          "then": { "$ref": "#/$defs/edge_error" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "publish" } } },
+          "then": { "$ref": "#/$defs/edge_publish" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "subscribe" } } },
+          "then": { "$ref": "#/$defs/edge_subscribe" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "handoff" } } },
+          "then": { "$ref": "#/$defs/edge_handoff" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "verify" } } },
+          "then": { "$ref": "#/$defs/edge_verify" }
+        }
+      ]
+    },
+
+    "edge_flow": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":  { "const": "flow" },
+        "from":  { "type": "string" },
+        "to":    { "type": "string" },
+        "label": { "type": "string" },
+        "data":  { "type": "string", "description": "Schema name of data on this edge" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_invoke": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":      { "const": "invoke" },
+        "from":      { "type": "string", "description": "Caller process ID" },
+        "to":        { "type": "string", "description": "Callee entity ID (agent or tool)" },
+        "label":     { "type": "string" },
+        "input":     { "type": "string", "description": "Input schema name" },
+        "output":    { "type": "string", "description": "Output schema name" },
+        "return_to": { "type": "string", "description": "Where result goes (defaults to caller)" },
+        "async":     { "type": "boolean", "default": false },
+        "retry":     { "$ref": "#/$defs/retry_config" },
+        "timeout":   { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_loop": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":           { "const": "loop" },
+        "from":           { "type": "string" },
+        "to":             { "type": "string" },
+        "label":          { "type": "string" },
+        "condition":      { "type": "string" },
+        "max_iterations": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_branch": {
+      "type": "object",
+      "required": ["from", "to", "condition"],
+      "properties": {
+        "type":      { "const": "branch" },
+        "from":      { "type": "string", "description": "Gate process ID" },
+        "to":        { "type": "string" },
+        "condition": { "type": "string" },
+        "label":     { "type": "string" },
+        "data":      { "type": "string" },
+        "priority":  { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_read": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":      { "const": "read" },
+        "from":      { "type": "string", "description": "Reader process or agent ID" },
+        "to":        { "type": "string", "description": "Store entity ID" },
+        "label":     { "type": "string" },
+        "query":     { "type": "string", "description": "Query/filter schema name" },
+        "query_key": { "type": "string", "description": "State key containing query value for dynamic lookups" },
+        "data":      { "type": "string", "description": "Schema name of returned data" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_write": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":  { "const": "write" },
+        "from":  { "type": "string" },
+        "to":    { "type": "string", "description": "Store entity ID" },
+        "label": { "type": "string" },
+        "data":  { "type": "string", "description": "Schema name of data to write" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_modify": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":   { "const": "modify" },
+        "from":   { "type": "string" },
+        "to":     { "type": "string" },
+        "label":  { "type": "string" },
+        "effect": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_observe": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":  { "const": "observe" },
+        "from":  { "type": "string" },
+        "to":    { "type": "string" },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_error": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":        { "const": "error" },
+        "from":        { "type": "string" },
+        "to":          { "type": "string" },
+        "label":       { "type": "string" },
+        "error_types": { "type": "array", "items": { "type": "string" } },
+        "data":        { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_publish": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":   { "const": "publish" },
+        "from":   { "type": "string" },
+        "to":     { "type": "string", "description": "Channel entity ID" },
+        "label":  { "type": "string" },
+        "filter": { "type": "string" },
+        "data":   { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_subscribe": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":      { "const": "subscribe" },
+        "from":      { "type": "string", "description": "Channel entity ID" },
+        "to":        { "type": "string" },
+        "label":     { "type": "string" },
+        "filter":    { "type": "string" },
+        "activates": { "type": "boolean", "default": true },
+        "data":      { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_handoff": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":      { "const": "handoff" },
+        "from":      { "type": "string", "description": "Handing-off agent ID" },
+        "to":        { "type": "string", "description": "Receiving agent ID" },
+        "label":     { "type": "string" },
+        "condition": { "type": "string" },
+        "context":   { "enum": ["full", "summary", "none"], "default": "full" },
+        "resumable": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "edge_verify": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "type":     { "const": "verify" },
+        "from":     { "type": "string", "description": "Constraint source (store or inline)" },
+        "to":       { "type": "string", "description": "Process being verified" },
+        "label":    { "type": "string" },
+        "phase":    { "enum": ["precondition", "postcondition", "invariant"], "default": "precondition" },
+        "on_fail":  { "enum": ["block", "warn", "log", "fallback"], "default": "block" },
+        "fallback": { "type": "string", "description": "Where to route on verification failure" }
+      },
+      "additionalProperties": false
+    },
+
+    "schema_definition": {
+      "type": "object",
+      "required": ["name", "fields"],
+      "properties": {
+        "name":        { "type": "string" },
+        "description": { "type": "string" },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/schema_field" },
+          "minItems": 1
+        },
+        "example":     { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "schema_field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name":        { "type": "string" },
+        "type":        { "type": "string", "description": "Primitive type (string, integer, float, boolean, object) or composite (list<T>, map<K,V>)" },
+        "description": { "type": "string" },
+        "default":     { "description": "Default value for this field" },
+        "optional":    { "type": "boolean", "description": "Whether this field is optional" }
+      },
+      "additionalProperties": false
+    },
+
+    "llm_config": {
+      "type": "object",
+      "properties": {
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "max_tokens":  { "type": "integer", "minimum": 1 },
+        "thinking":    { "enum": ["none", "low", "high", "extended"] },
+        "stop":        { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "termination_condition": {
+      "description": "Composable termination condition for protocols, teams, and loops",
+      "oneOf": [
+        { "type": "string", "description": "Simple condition string" },
+        {
+          "type": "object",
+          "properties": {
+            "max_turns": {
+              "type": "object",
+              "required": ["count"],
+              "properties": { "count": { "type": "integer", "minimum": 1 } },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "max_time": {
+              "type": "object",
+              "required": ["duration"],
+              "properties": { "duration": { "type": "string" } },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text_match": {
+              "type": "object",
+              "required": ["pattern", "in_field"],
+              "properties": {
+                "pattern":  { "type": "string" },
+                "in_field": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["operator", "conditions"],
+          "properties": {
+            "operator":   { "enum": ["and", "or", "not"] },
+            "conditions": { "type": "array", "items": { "$ref": "#/$defs/termination_condition" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "state_config": {
+      "type": "object",
+      "properties": {
+        "schema":   { "type": "string", "description": "Schema name for full state shape" },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "properties": {
+              "name":    { "type": "string" },
+              "type":    { "type": "string" },
+              "reducer": { "enum": ["replace", "append", "merge", "custom"], "default": "replace" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "initial": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "checkpointing_config": {
+      "type": "object",
+      "properties": {
+        "enabled":     { "type": "boolean", "default": false },
+        "strategy":    { "enum": ["every_step", "every_gate", "on_error", "manual"], "default": "every_step" },
+        "storage":     { "enum": ["memory", "file", "database"], "default": "memory" },
+        "time_travel": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "contracts_config": {
+      "type": "object",
+      "properties": {
+        "invariants":     { "type": "array", "items": { "type": "string" }, "description": "Conditions that must hold at every step boundary" },
+        "preconditions":  { "type": "array", "items": { "type": "string" }, "description": "Conditions before spec execution begins" },
+        "postconditions": { "type": "array", "items": { "type": "string" }, "description": "Conditions when spec execution completes" },
+        "formalism":      { "enum": ["natural_language", "fol", "python", "smtlib", "custom"], "default": "natural_language" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

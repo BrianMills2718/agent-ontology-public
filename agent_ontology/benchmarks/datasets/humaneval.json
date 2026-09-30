@@ -1,0 +1,183 @@
+{
+  "name": "HumanEval",
+  "description": "Code generation benchmark - Python programming problems (25 curated examples)",
+  "source": "Inspired by OpenAI HumanEval (Chen et al., 2021)",
+  "scoring": ["pass_at_1"],
+  "examples": [
+    {
+      "id": "humaneval_0",
+      "question": "Write a function that checks if a number is prime. Return True if the number is prime, False otherwise. 1 is not prime. Negative numbers and 0 are not prime.",
+      "entry_point": "is_prime",
+      "test_cases": "assert is_prime(2) == True\nassert is_prime(3) == True\nassert is_prime(4) == False\nassert is_prime(17) == True\nassert is_prime(1) == False\nassert is_prime(0) == False\nassert is_prime(-5) == False\nassert is_prime(97) == True\nassert is_prime(100) == False",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_1",
+      "question": "Write a function that takes a string and returns the string reversed.",
+      "entry_point": "reverse_string",
+      "test_cases": "assert reverse_string('hello') == 'olleh'\nassert reverse_string('') == ''\nassert reverse_string('a') == 'a'\nassert reverse_string('racecar') == 'racecar'\nassert reverse_string('Python') == 'nohtyP'",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_2",
+      "question": "Write a function that takes a list of integers and returns the maximum element. If the list is empty, return None.",
+      "entry_point": "find_max",
+      "test_cases": "assert find_max([1, 2, 3, 4, 5]) == 5\nassert find_max([-1, -2, -3]) == -1\nassert find_max([42]) == 42\nassert find_max([]) == None\nassert find_max([3, 1, 4, 1, 5, 9, 2, 6]) == 9\nassert find_max([-10, 0, 10]) == 10",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_3",
+      "question": "Write a function that takes a string and counts the number of vowels (a, e, i, o, u) in it. The function should be case-insensitive.",
+      "entry_point": "count_vowels",
+      "test_cases": "assert count_vowels('hello') == 2\nassert count_vowels('AEIOU') == 5\nassert count_vowels('bcdfg') == 0\nassert count_vowels('') == 0\nassert count_vowels('Python Programming') == 4\nassert count_vowels('aEiOu') == 5",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_4",
+      "question": "Write a function that takes a list of integers and returns a new list containing only the even numbers, preserving the original order.",
+      "entry_point": "filter_even",
+      "test_cases": "assert filter_even([1, 2, 3, 4, 5, 6]) == [2, 4, 6]\nassert filter_even([1, 3, 5]) == []\nassert filter_even([]) == []\nassert filter_even([2, 4, 6]) == [2, 4, 6]\nassert filter_even([-2, -1, 0, 1, 2]) == [-2, 0, 2]",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_5",
+      "question": "Write a function that computes the factorial of a non-negative integer. For n=0, return 1.",
+      "entry_point": "factorial",
+      "test_cases": "assert factorial(0) == 1\nassert factorial(1) == 1\nassert factorial(5) == 120\nassert factorial(10) == 3628800\nassert factorial(3) == 6\nassert factorial(7) == 5040",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_6",
+      "question": "Write a function that takes two sorted lists of integers and merges them into a single sorted list.",
+      "entry_point": "merge_sorted",
+      "test_cases": "assert merge_sorted([1, 3, 5], [2, 4, 6]) == [1, 2, 3, 4, 5, 6]\nassert merge_sorted([], [1, 2, 3]) == [1, 2, 3]\nassert merge_sorted([1, 2, 3], []) == [1, 2, 3]\nassert merge_sorted([], []) == []\nassert merge_sorted([1, 1, 1], [1, 1]) == [1, 1, 1, 1, 1]\nassert merge_sorted([-3, -1, 5], [-2, 0, 4]) == [-3, -2, -1, 0, 4, 5]",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_7",
+      "question": "Write a function that checks if a given string is a palindrome. Ignore case and non-alphanumeric characters.",
+      "entry_point": "is_palindrome",
+      "test_cases": "assert is_palindrome('racecar') == True\nassert is_palindrome('hello') == False\nassert is_palindrome('A man a plan a canal Panama') == True\nassert is_palindrome('') == True\nassert is_palindrome('Was it a car or a cat I saw?') == True\nassert is_palindrome('No lemon, no melon') == True\nassert is_palindrome('abc') == False",
+      "difficulty": "easy"
+    },
+    {
+      "id": "humaneval_8",
+      "question": "Write a function that takes a list of strings and returns the longest common prefix shared among all strings. If there is no common prefix, return an empty string.",
+      "entry_point": "longest_common_prefix",
+      "test_cases": "assert longest_common_prefix(['flower', 'flow', 'flight']) == 'fl'\nassert longest_common_prefix(['dog', 'racecar', 'car']) == ''\nassert longest_common_prefix(['interspecies', 'interstellar', 'interstate']) == 'inters'\nassert longest_common_prefix(['abc']) == 'abc'\nassert longest_common_prefix([]) == ''\nassert longest_common_prefix(['', 'abc']) == ''\nassert longest_common_prefix(['prefix', 'prefix']) == 'prefix'",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_9",
+      "question": "Write a function that takes a string containing brackets '(', ')', '{', '}', '[', ']' and determines if the input string has valid (properly matched and nested) brackets.",
+      "entry_point": "valid_brackets",
+      "test_cases": "assert valid_brackets('()') == True\nassert valid_brackets('()[]{}') == True\nassert valid_brackets('(]') == False\nassert valid_brackets('([)]') == False\nassert valid_brackets('{[]}') == True\nassert valid_brackets('') == True\nassert valid_brackets('((()))') == True\nassert valid_brackets('(') == False\nassert valid_brackets('){') == False",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_10",
+      "question": "Write a function that takes a positive integer and returns the sum of its digits. Repeat the process until the result is a single digit, then return that digit.",
+      "entry_point": "digital_root",
+      "test_cases": "assert digital_root(16) == 7\nassert digital_root(942) == 6\nassert digital_root(132189) == 6\nassert digital_root(493193) == 2\nassert digital_root(0) == 0\nassert digital_root(9) == 9\nassert digital_root(99) == 9\nassert digital_root(10) == 1",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_11",
+      "question": "Write a function that takes a list of integers and returns the length of the longest strictly increasing subsequence (not necessarily contiguous).",
+      "entry_point": "longest_increasing_subsequence",
+      "test_cases": "assert longest_increasing_subsequence([10, 9, 2, 5, 3, 7, 101, 18]) == 4\nassert longest_increasing_subsequence([0, 1, 0, 3, 2, 3]) == 4\nassert longest_increasing_subsequence([7, 7, 7, 7]) == 1\nassert longest_increasing_subsequence([]) == 0\nassert longest_increasing_subsequence([1]) == 1\nassert longest_increasing_subsequence([1, 2, 3, 4, 5]) == 5\nassert longest_increasing_subsequence([5, 4, 3, 2, 1]) == 1",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_12",
+      "question": "Write a function that takes a string of words separated by spaces and returns the string with the words in reverse order. Leading/trailing spaces should be removed and multiple spaces between words should be reduced to a single space.",
+      "entry_point": "reverse_words",
+      "test_cases": "assert reverse_words('the sky is blue') == 'blue is sky the'\nassert reverse_words('  hello world  ') == 'world hello'\nassert reverse_words('a good   example') == 'example good a'\nassert reverse_words('single') == 'single'\nassert reverse_words('') == ''\nassert reverse_words('   ') == ''",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_13",
+      "question": "Write a function that takes a list of integers and a target integer, and returns a list of two indices such that the numbers at those indices add up to the target. Assume exactly one solution exists. Return the indices in ascending order.",
+      "entry_point": "two_sum",
+      "test_cases": "assert two_sum([2, 7, 11, 15], 9) == [0, 1]\nassert two_sum([3, 2, 4], 6) == [1, 2]\nassert two_sum([3, 3], 6) == [0, 1]\nassert two_sum([1, 5, 3, 7], 8) == [1, 2]\nassert two_sum([-3, 4, 3, 90], 0) == [0, 2]",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_14",
+      "question": "Write a function that generates the first n numbers of the Fibonacci sequence as a list. The sequence starts with 0, 1, 1, 2, 3, 5, ... If n is 0, return an empty list.",
+      "entry_point": "fibonacci",
+      "test_cases": "assert fibonacci(0) == []\nassert fibonacci(1) == [0]\nassert fibonacci(2) == [0, 1]\nassert fibonacci(5) == [0, 1, 1, 2, 3]\nassert fibonacci(8) == [0, 1, 1, 2, 3, 5, 8, 13]\nassert fibonacci(10) == [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_15",
+      "question": "Write a function that takes a list of integers representing an elevation map where the width of each bar is 1, and computes how much water it can trap after raining.",
+      "entry_point": "trap_water",
+      "test_cases": "assert trap_water([0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]) == 6\nassert trap_water([4, 2, 0, 3, 2, 5]) == 9\nassert trap_water([]) == 0\nassert trap_water([1, 2, 3]) == 0\nassert trap_water([3, 2, 1]) == 0\nassert trap_water([3, 0, 3]) == 3\nassert trap_water([1]) == 0\nassert trap_water([5, 2, 1, 2, 1, 5]) == 14",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_16",
+      "question": "Write a function that takes a string and returns the length of the longest substring without repeating characters.",
+      "entry_point": "longest_unique_substring",
+      "test_cases": "assert longest_unique_substring('abcabcbb') == 3\nassert longest_unique_substring('bbbbb') == 1\nassert longest_unique_substring('pwwkew') == 3\nassert longest_unique_substring('') == 0\nassert longest_unique_substring('abcdef') == 6\nassert longest_unique_substring('aab') == 2\nassert longest_unique_substring('dvdf') == 3",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_17",
+      "question": "Write a function that takes a nested list (which may contain integers or other nested lists) and returns a flat list of all integers in the order they appear.",
+      "entry_point": "flatten",
+      "test_cases": "assert flatten([1, [2, 3], [4, [5, 6]]]) == [1, 2, 3, 4, 5, 6]\nassert flatten([]) == []\nassert flatten([1, 2, 3]) == [1, 2, 3]\nassert flatten([[[[1]]]]) == [1]\nassert flatten([[], [1], [2, [3]]]) == [1, 2, 3]\nassert flatten([[1, 2], [3, 4], [5, 6]]) == [1, 2, 3, 4, 5, 6]",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_18",
+      "question": "Write a function that takes a Roman numeral string and converts it to an integer. Valid input contains characters I, V, X, L, C, D, M. Handle subtractive notation (e.g., IV=4, IX=9, XL=40, XC=90, CD=400, CM=900).",
+      "entry_point": "roman_to_int",
+      "test_cases": "assert roman_to_int('III') == 3\nassert roman_to_int('IV') == 4\nassert roman_to_int('IX') == 9\nassert roman_to_int('LVIII') == 58\nassert roman_to_int('MCMXCIV') == 1994\nassert roman_to_int('XLII') == 42\nassert roman_to_int('DCCCXC') == 890\nassert roman_to_int('MMXXV') == 2025",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_19",
+      "question": "Write a function that takes a matrix (list of lists of integers) and returns its transpose. The transpose swaps rows and columns.",
+      "entry_point": "transpose",
+      "test_cases": "assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]\nassert transpose([[1]]) == [[1]]\nassert transpose([[1, 2], [3, 4], [5, 6]]) == [[1, 3, 5], [2, 4, 6]]\nassert transpose([[1, 2, 3]]) == [[1], [2], [3]]\nassert transpose([]) == []",
+      "difficulty": "medium"
+    },
+    {
+      "id": "humaneval_20",
+      "question": "Write a function that takes a list of integers and returns all unique permutations of that list as a list of lists. The order of permutations in the output does not matter, but each permutation should appear exactly once. Sort the output for consistency.",
+      "entry_point": "unique_permutations",
+      "test_cases": "assert unique_permutations([1, 1, 2]) == [[1, 1, 2], [1, 2, 1], [2, 1, 1]]\nassert unique_permutations([1, 2, 3]) == [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]]\nassert unique_permutations([1]) == [[1]]\nassert unique_permutations([]) == [[]]\nassert unique_permutations([2, 2]) == [[2, 2]]",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_21",
+      "question": "Write a function that takes a string containing a mathematical expression with non-negative integers and the operators +, -, *, / (integer division truncated toward zero) and evaluates it. The expression has no parentheses and follows standard operator precedence (* and / before + and -). There are no spaces in the input.",
+      "entry_point": "evaluate_expression",
+      "test_cases": "assert evaluate_expression('3+2*2') == 7\nassert evaluate_expression('3/2') == 1\nassert evaluate_expression('3+5/2') == 5\nassert evaluate_expression('10-3+2') == 9\nassert evaluate_expression('2*3+4') == 10\nassert evaluate_expression('14/3*2') == 8\nassert evaluate_expression('0+0') == 0\nassert evaluate_expression('42') == 42",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_22",
+      "question": "Write a function that takes a list of non-negative integers representing coin denominations and a target amount, and returns the minimum number of coins needed to make that amount. If it is not possible to make the amount with the given coins, return -1. You have an infinite supply of each coin denomination.",
+      "entry_point": "min_coins",
+      "test_cases": "assert min_coins([1, 5, 10, 25], 30) == 2\nassert min_coins([1, 5, 10, 25], 11) == 2\nassert min_coins([2], 3) == -1\nassert min_coins([1], 0) == 0\nassert min_coins([1, 2, 5], 11) == 3\nassert min_coins([1], 7) == 7\nassert min_coins([3, 7], 14) == 2\nassert min_coins([2, 5, 10], 1) == -1",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_23",
+      "question": "Write a function that takes a 9x9 2D list representing a Sudoku board and returns True if it is a valid configuration. Each row, column, and 3x3 sub-box must contain the digits 1-9 without repetition. Empty cells are represented by 0 and should be ignored during validation.",
+      "entry_point": "valid_sudoku",
+      "test_cases": "assert valid_sudoku([[5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],[8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],[0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,9]]) == True\nassert valid_sudoku([[5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],[8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],[0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,7]]) == False\nassert valid_sudoku([[1,0,0,0,0,0,0,0,0],[0,2,0,0,0,0,0,0,0],[0,0,3,0,0,0,0,0,0],[0,0,0,4,0,0,0,0,0],[0,0,0,0,5,0,0,0,0],[0,0,0,0,0,6,0,0,0],[0,0,0,0,0,0,7,0,0],[0,0,0,0,0,0,0,8,0],[0,0,0,0,0,0,0,0,9]]) == True\nassert valid_sudoku([[1,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]) == False",
+      "difficulty": "hard"
+    },
+    {
+      "id": "humaneval_24",
+      "question": "Write a function that takes a string of space-separated integers and returns a string of those integers sorted by their absolute value in ascending order. If two integers have the same absolute value, maintain their original relative order.",
+      "entry_point": "sort_by_abs",
+      "test_cases": "assert sort_by_abs('4 -2 3 -1 5') == '-1 -2 3 4 5'\nassert sort_by_abs('0') == '0'\nassert sort_by_abs('-5 5 -3 3') == '-3 3 -5 5'\nassert sort_by_abs('1 -1 2 -2 3 -3') == '1 -1 2 -2 3 -3'\nassert sort_by_abs('10 -9 8 -7') == '-7 8 -9 10'\nassert sort_by_abs('') == ''",
+      "difficulty": "hard"
+    }
+  ]
+}

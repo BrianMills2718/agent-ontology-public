@@ -1,0 +1,41 @@
+# Doc-Code Coupling Map
+#
+# Defines which docs must be reviewed when source files change.
+# CI will fail on strict couplings, warn on soft couplings.
+#
+# Format:
+#   - sources: [glob patterns for source files]
+#     docs: [paths to docs that should be updated]
+#     description: what this coupling represents
+#     soft: true  # Optional: warn instead of fail
+
+couplings:
+  - sources:
+      - "spec-viewer.html"
+      - "agent_ontology/v2/spec-viewer-v2.html"
+    docs:
+      - "ui/registry.yaml"
+    description: "A UI-serving file is about to be created or changed. Read ui/registry.yaml first -- this repo already has two spec-viewer surfaces (v1 and v2); a change is very unlikely to need a third."
+
+  # Example: Core module documentation
+  - sources:
+      - "src/core/*.py"
+    docs:
+      - "docs/architecture/core.md"
+    description: "Core module architecture"
+
+  # Example: API documentation
+  - sources:
+      - "src/api/*.py"
+    docs:
+      - "docs/api.md"
+    description: "API reference"
+
+  # Example: Configuration
+  - sources:
+      - "src/config.py"
+      - "config/*.yaml"
+    docs:
+      - "docs/configuration.md"
+    description: "Configuration options"
+    soft: true  # Warn only, don't fail CI

@@ -1,0 +1,15 @@
+name: "Decomposition + Debate"
+description: "Decompose a problem into sub-problems, then debate the synthesized answer for quality"
+version: "1.0"
+model: "gemini-3-flash-preview"
+compose:
+  - pattern: decomposition
+    as: dc
+    config:
+      max_retries: 2
+
+  - pattern: debate
+    as: db
+    graft_after: dc
+    config:
+      max_rounds: 2

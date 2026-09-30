@@ -1,0 +1,158 @@
+{
+  "name": "ARC",
+  "description": "Science and reasoning multiple-choice questions (25 curated examples)",
+  "source": "Inspired by ARC Dataset (Clark et al., 2018)",
+  "scoring": ["em"],
+  "examples": [
+    {
+      "id": "arc_0",
+      "question": "Which of the following is the primary source of energy for Earth's water cycle?\nA) Geothermal energy\nB) Wind energy\nC) Solar energy\nD) Tidal energy",
+      "answer": "C",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_1",
+      "question": "A student places a metal spoon and a wooden spoon in a cup of hot water. After one minute, the metal spoon feels much hotter than the wooden spoon. What property of metal best explains this observation?\nA) Metal has a higher density than wood\nB) Metal is a better conductor of heat than wood\nC) Metal has a higher melting point than wood\nD) Metal reflects more light than wood",
+      "answer": "B",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_2",
+      "question": "Which of the following is an example of a chemical change?\nA) Melting ice\nB) Dissolving sugar in water\nC) Cutting a piece of paper\nD) Burning a piece of wood",
+      "answer": "D",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_3",
+      "question": "What is the main function of the cell membrane?\nA) To store genetic information\nB) To produce energy for the cell\nC) To control what enters and leaves the cell\nD) To break down waste materials",
+      "answer": "C",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_4",
+      "question": "Which layer of Earth's atmosphere contains the ozone layer that protects life from ultraviolet radiation?\nA) Troposphere\nB) Stratosphere\nC) Mesosphere\nD) Thermosphere",
+      "answer": "B",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_5",
+      "question": "A ball is thrown straight up into the air. At the highest point of its path, what is its velocity?\nA) Maximum\nB) Equal to its initial velocity\nC) Zero\nD) Negative",
+      "answer": "C",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_6",
+      "question": "Which of the following best describes the relationship between producers and consumers in a food chain?\nA) Producers consume other organisms for energy\nB) Consumers convert sunlight into chemical energy\nC) Producers convert sunlight into chemical energy that consumers use\nD) Consumers and producers both get energy directly from the sun",
+      "answer": "C",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_7",
+      "question": "In a simple electric circuit, what happens to the current if the resistance is doubled while the voltage remains constant?\nA) The current doubles\nB) The current is halved\nC) The current remains the same\nD) The current quadruples",
+      "answer": "B",
+      "difficulty": "easy"
+    },
+    {
+      "id": "arc_8",
+      "question": "A scientist observes that a certain species of moth has evolved darker coloring over the past century in an industrialized area. Which process best explains this change?\nA) Genetic drift\nB) Artificial selection\nC) Natural selection\nD) Spontaneous mutation",
+      "answer": "C",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_9",
+      "question": "Two identical containers are filled with equal volumes of water. Container A is heated to 80 degrees C and Container B remains at 20 degrees C. If they are placed in contact with each other, which statement is correct?\nA) Heat flows from B to A until both reach 80 degrees C\nB) Heat flows from A to B until both reach 50 degrees C\nC) Heat flows from A to B until both reach 20 degrees C\nD) No heat transfer occurs because they contain the same substance",
+      "answer": "B",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_10",
+      "question": "A plant cell is placed in a solution with a higher solute concentration than the cell's interior. What will most likely happen?\nA) The cell will swell and burst\nB) Water will move into the cell by osmosis\nC) Water will move out of the cell, causing it to shrink\nD) Solute will move into the cell by diffusion",
+      "answer": "C",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_11",
+      "question": "Which of the following correctly lists the stages of mitosis in order?\nA) Prophase, Metaphase, Anaphase, Telophase\nB) Metaphase, Prophase, Telophase, Anaphase\nC) Anaphase, Telophase, Prophase, Metaphase\nD) Telophase, Anaphase, Metaphase, Prophase",
+      "answer": "A",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_12",
+      "question": "A rock sample contains 25% of its original radioactive parent isotope and 75% daughter isotope. If the half-life of the parent isotope is 500 million years, approximately how old is the rock?\nA) 250 million years\nB) 500 million years\nC) 1 billion years\nD) 1.5 billion years",
+      "answer": "C",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_13",
+      "question": "An astronaut on the Moon drops a hammer and a feather at the same time from the same height. What happens?\nA) The hammer hits the ground first because it is heavier\nB) The feather hits the ground first because it is lighter\nC) Both hit the ground at the same time because there is no air resistance\nD) Neither falls because there is no gravity on the Moon",
+      "answer": "C",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_14",
+      "question": "When an acid reacts with a base, what are the two main products?\nA) An acid and water\nB) A salt and water\nC) A base and carbon dioxide\nD) Hydrogen gas and a salt",
+      "answer": "B",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_15",
+      "question": "Which type of plate boundary is most commonly associated with the formation of deep ocean trenches?\nA) Divergent boundary\nB) Transform boundary\nC) Convergent boundary\nD) Hotspot",
+      "answer": "C",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_16",
+      "question": "A solution has a pH of 3. If the pH is increased to 5, how does the hydrogen ion concentration change?\nA) It increases by a factor of 2\nB) It decreases by a factor of 2\nC) It increases by a factor of 100\nD) It decreases by a factor of 100",
+      "answer": "D",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_17",
+      "question": "In a closed ecosystem, if a disease eliminates most of the primary consumers, what is the most likely short-term effect on the primary producers?\nA) Their population will decrease due to lack of nutrients\nB) Their population will increase due to reduced herbivory\nC) Their population will remain unchanged\nD) They will evolve to become consumers",
+      "answer": "B",
+      "difficulty": "medium"
+    },
+    {
+      "id": "arc_18",
+      "question": "A car travels at a constant speed of 30 m/s and then applies the brakes, decelerating uniformly at 5 m/s squared. How far does the car travel before coming to a complete stop?\nA) 6 meters\nB) 45 meters\nC) 90 meters\nD) 150 meters",
+      "answer": "C",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_19",
+      "question": "In a population of organisms, the frequency of a recessive allele (q) is 0.3. Assuming Hardy-Weinberg equilibrium, what is the expected frequency of heterozygous individuals?\nA) 0.09\nB) 0.21\nC) 0.42\nD) 0.49",
+      "answer": "C",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_20",
+      "question": "A sealed container holds a gas at 300 K and 1 atm. If the temperature is increased to 600 K while the volume remains constant, what is the new pressure?\nA) 0.5 atm\nB) 1 atm\nC) 2 atm\nD) 4 atm",
+      "answer": "C",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_21",
+      "question": "During the light-dependent reactions of photosynthesis, water molecules are split. What are the products of this photolysis?\nA) Carbon dioxide, ATP, and NADPH\nB) Oxygen, hydrogen ions, and electrons\nC) Glucose and oxygen\nD) ATP, ADP, and carbon dioxide",
+      "answer": "B",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_22",
+      "question": "A 2 kg object moving at 4 m/s collides with a stationary 6 kg object. If the collision is perfectly inelastic, what is the velocity of the combined mass after the collision?\nA) 0.5 m/s\nB) 1 m/s\nC) 2 m/s\nD) 4 m/s",
+      "answer": "B",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_23",
+      "question": "A galvanic cell is constructed using zinc (standard reduction potential -0.76 V) and copper (standard reduction potential +0.34 V) electrodes. What is the standard cell potential?\nA) 0.42 V\nB) 1.10 V\nC) -1.10 V\nD) -0.42 V",
+      "answer": "B",
+      "difficulty": "hard"
+    },
+    {
+      "id": "arc_24",
+      "question": "Cepheid variable stars are used as 'standard candles' in astronomy. This is because there is a reliable relationship between their period of brightness variation and their:\nA) Temperature\nB) Mass\nC) Intrinsic luminosity\nD) Chemical composition",
+      "answer": "C",
+      "difficulty": "hard"
+    }
+  ]
+}

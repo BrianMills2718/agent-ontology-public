@@ -1,0 +1,247 @@
+# ═══════════════════════════════════════════════════════════════
+# BabyAGI — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# This should map 1:1 to the BabyAGI architecture diagram:
+# - Gray boxes  → processes (steps)
+# - Cyan boxes  → entities (agents)
+# - Arrows      → edges (flow, invoke, loop)
+# - The big "Loop" arrow → loop edge
+
+name: "BabyAGI"
+version: "1.0"
+description: "Task-driven autonomous agent that creates, prioritizes, and executes tasks in a loop"
+entry_point: pull_task
+
+# ── Entities (the cyan boxes + stores) ──────────────────────
+
+entities:
+
+  - id: execution_agent
+    type: agent
+    label: "Execution Agent"
+    model: gemini-3-flash-preview
+    system_prompt: "You are an AI who performs one task. You will receive a JSON object with 'task' (the task to perform), 'objective' (the overall goal), and 'context' (relevant prior results). Perform the task and return your result."
+    input_schema: ExecutionInput
+    output_schema: ExecutionOutput
+
+  - id: context_agent
+    type: agent
+    label: "Context Agent"
+    model: gemini-3-flash-preview
+    system_prompt: "You retrieve relevant context for a given query from stored results. You will receive a query, top_k count, and stored_results (a list of text strings from previous task executions). Select and return the top_k most relevant stored_results as the 'context' array. For 'sources', use short labels like 'task_result_1'. If stored_results is empty, return empty arrays for both context and sources."
+    input_schema: ContextQuery
+    output_schema: ContextResult
+
+  - id: task_creation_agent
+    type: agent
+    label: "Task Creation Agent"
+    model: gemini-3-flash-preview
+    system_prompt: "You create new tasks based on the result of an execution agent. You will receive the objective, the latest execution result, and a list of existing incomplete tasks. Return a TaskList containing ALL existing incomplete tasks PLUS any new tasks needed to achieve the objective. Assign incrementing integer IDs to new tasks (starting after the highest existing ID). Each task needs: id (integer), description (string), status ('pending'), priority (integer, 1=highest). Do NOT drop any existing tasks from the list."
+    input_schema: TaskCreationInput
+    output_schema: TaskList
+
+  - id: prioritization_agent
+    type: agent
+    label: "Prioritization Agent"
+    model: gemini-3-flash-preview
+    system_prompt: "You reprioritize a task list based on the objective."
+    input_schema: TaskList
+    output_schema: TaskList
+
+  - id: vector_db
+    type: store
+    label: "Vector DB"
+    store_type: vector
+    schema: EmbeddedResult
+    retention: persistent
+
+# ── Processes (the gray boxes) ──────────────────────────────
+
+processes:
+
+  - id: pull_task
+    type: step
+    label: "Step 1: Pull task"
+    description: "Dequeue the highest-priority incomplete task from the task list"
+    data_out: Task
+    logic: |
+      tasks = state.data.get("tasks", [])
+      if not tasks:
+          print("    No tasks remaining!")
+          state.data["_done"] = True
+          return state
+      completed = state.data.get("completed_count", 0)
+      max_tasks = state.data.get("max_tasks", 5)
+      if completed >= max_tasks:
+          print(f"    Completed {completed} tasks (max {max_tasks}). Stopping.")
+          state.data["_done"] = True
+          return state
+      task = tasks.pop(0)
+      state.data["task"] = task
+      state.data["tasks"] = tasks
+      state.data["completed_count"] = completed + 1
+      state.data["context"] = [e.get("text", "") for e in state.data.get("vector_db", []) if e.get("text")][-5:]
+      print(f"    Pulled task {completed + 1}/{max_tasks}: {task.get('description', task)}")
+      print(f"    Context from prior results: {len(state.data['context'])} items")
+
+  - id: enrich
+    type: step
+    label: "Step 2: Enrich and store"
+    description: "Take execution result, retrieve relevant context, enrich the result, and persist to vector store"
+    data_in: ExecutionOutput
+    data_out: EnrichedResult
+    logic: |
+      state.data["query"] = state.data.get("result", "")
+      state.data["top_k"] = 5
+      state.data["stored_results"] = [e.get("text", "") for e in state.data.get("vector_db", []) if e.get("text")]
+      state.data["text"] = state.data.get("result", "")
+      state.data["embedding"] = []
+      state.data["metadata"] = {"task_id": state.data.get("task_id"), "objective": state.data.get("objective", "")}
+
+  - id: create_and_reprioritize
+    type: step
+    label: "Step 3: Create and reprioritize"
+    description: "Based on the enriched result, generate new tasks and reprioritize the full task list"
+    data_in: EnrichedResult
+    data_out: TaskList
+    logic: |
+      state.data["existing_tasks"] = state.data.get("tasks", [])
+
+# ── Edges (the arrows) ─────────────────────────────────────
+
+edges:
+
+  # Main flow: Step 1 → Execution Agent → Step 2
+  - type: invoke
+    from: pull_task
+    to: execution_agent
+    label: "Execute task"
+    input: ExecutionInput
+    output: ExecutionOutput
+
+  - type: flow
+    from: pull_task
+    to: enrich
+    label: "Return result"
+    data: ExecutionOutput
+    # Note: the invoke above returns to pull_task, which flows to enrich.
+    # Alternatively, return_to could point directly to enrich.
+
+  # Step 2 callouts: Context Agent + Vector DB
+  - type: invoke
+    from: enrich
+    to: context_agent
+    label: "Retrieve context"
+    input: ContextQuery
+    output: ContextResult
+
+  - type: read
+    from: pull_task
+    to: vector_db
+    label: "Read prior results"
+    data: EmbeddedResult
+
+  - type: read
+    from: enrich
+    to: vector_db
+    label: "Read stored results"
+    data: EmbeddedResult
+
+  - type: write
+    from: enrich
+    to: vector_db
+    label: "Store result in Vector DB"
+    data: EmbeddedResult
+
+  # Step 2 → Step 3
+  - type: flow
+    from: enrich
+    to: create_and_reprioritize
+    label: "Store result in Vector DB"
+
+  # Step 3 callouts: Task Creation Agent + Prioritization Agent
+  - type: invoke
+    from: create_and_reprioritize
+    to: task_creation_agent
+    label: "Create new tasks"
+    input: TaskCreationInput
+    output: TaskList
+
+  - type: invoke
+    from: create_and_reprioritize
+    to: prioritization_agent
+    label: "Reprioritize task list"
+    input: TaskList
+    output: TaskList
+
+  # The big Loop arrow: Step 3 → Step 1
+  - type: loop
+    from: create_and_reprioritize
+    to: pull_task
+    label: "Loop"
+    condition: "tasks is not empty"
+
+# ── Schemas (data shapes) ──────────────────────────────────
+
+schemas:
+
+  - name: Task
+    description: "A single task in the queue"
+    fields:
+      - { name: id, type: integer }
+      - { name: description, type: string }
+      - { name: status, type: "enum[pending, complete]" }
+      - { name: priority, type: integer }
+
+  - name: TaskList
+    description: "Ordered list of tasks"
+    fields:
+      - { name: tasks, type: "list<Task>" }
+      - { name: objective, type: string }
+
+  - name: ExecutionInput
+    description: "Input to the execution agent"
+    fields:
+      - { name: task, type: Task }
+      - { name: objective, type: string }
+      - { name: context, type: "list<string>" }
+
+  - name: ExecutionOutput
+    description: "Result of task execution"
+    fields:
+      - { name: result, type: string }
+      - { name: task_id, type: integer }
+
+  - name: ContextQuery
+    description: "Query to the context agent"
+    fields:
+      - { name: query, type: string }
+      - { name: top_k, type: integer, default: 5 }
+      - { name: stored_results, type: "list<string>" }
+
+  - name: ContextResult
+    description: "Retrieved context"
+    fields:
+      - { name: context, type: "list<string>" }
+      - { name: sources, type: "list<string>" }
+
+  - name: EnrichedResult
+    description: "Execution result enriched with context"
+    fields:
+      - { name: result, type: string }
+      - { name: context, type: "list<string>" }
+      - { name: task_id, type: integer }
+
+  - name: EmbeddedResult
+    description: "Result stored in vector DB"
+    fields:
+      - { name: text, type: string }
+      - { name: embedding, type: "list<float>" }
+      - { name: metadata, type: object }
+
+  - name: TaskCreationInput
+    description: "Input to the task creation agent"
+    fields:
+      - { name: objective, type: string }
+      - { name: result, type: string }
+      - { name: existing_tasks, type: "list<Task>" }

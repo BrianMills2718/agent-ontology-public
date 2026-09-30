@@ -1,0 +1,1432 @@
+# ═══════════════════════════════════════════════════════════════
+# AutoGPT — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Goal-driven autonomous agent with self-criticism loop.
+# Think → Criticize → Decide → Act → Observe → loop.
+
+name: "AutoGPT"
+version: "1.0"
+description: "Goal-driven autonomous agent with planning, self-criticism, and iterative execution"
+entry_point: set_goal
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: planner
+    type: agent
+    label: "Planner"
+    model: openrouter/deepseek/deepseek-chat
+    system_prompt: |
+      You are an autonomous AI agent planner. Given an objective, break it down into
+      a concrete plan of 3-7 actionable steps. Each step should be specific enough to execute.
+      Consider dependencies between steps.
+      Return strict JSON matching the output schema:
+      { "plan": [<step strings>], "objective": <string> }.
+      Keep steps action-oriented and executable in a local developer workspace.
+      Prefer a Python 3 standard-library implementation (e.g., sqlite3 + http.server or CLI),
+      not frameworks that require package installation.
+    input_schema: PlanInput
+    output_schema: Plan
+
+  - id: thinker
+    type: agent
+    label: "Thinker"
+    model: openrouter/deepseek/deepseek-chat
+    system_prompt: |
+      You are the reasoning component of an autonomous agent. Given the current goal,
+      plan, completed results, and current step, reason about what specific action to take.
+      Consider what information you have, what you need, and the best approach.
+      Output your thought process and a concrete proposed action that can be executed
+      in a local workspace this turn.
+      Prefer dependency-free actions.
+    input_schema: ThinkInput
+    output_schema: Thought
+
+  - id: critic
+    type: agent
+    label: "Critic"
+    model: openrouter/deepseek/deepseek-chat
+    system_prompt: |
+      You are a self-critic for an autonomous agent. Review the proposed thought and action.
+      Check for: logical errors, missing information, better alternatives, potential risks.
+      Rate the proposal 1-10 and suggest improvements. If rating >= 7, approve. Otherwise, reject
+      with specific feedback.
+    input_schema: CriticInput
+    output_schema: Criticism
+
+  - id: executor
+    type: agent
+    label: "Executor"
+    model: openrouter/deepseek/deepseek-chat
+    system_prompt: |
+      You are an execution planner that converts an action into either a shell command
+      or a typed external interface call.
+      Return strict JSON matching schema:
+      - action_type: one of "command", "external_call", "none"
+      - command: single shell command to run in workspace_dir, or empty string when not used
+      - interface_name: external interface when action_type=external_call, else empty string
+      - payload: object for external call arguments; use {} when not used
+      - routing_policy: ALWAYS return an object with keys
+        {prefer_external_call:boolean, preferred_interface:string, query:string, reason:string}
+        Use prefer_external_call=true for retrieval/discovery steps and false for build/write steps.
+      - action_result: short description of expected outcome
+      - success: true if command is valid and useful, else false
+
+      Rules:
+      1) Prefer concrete file-creating/modifying commands for coding tasks.
+      2) Non-interactive commands only.
+      3) Never use destructive commands (no rm -rf, no git reset --hard).
+      4) Keep command scoped to workspace_dir.
+      5) If capability_profile != "external_enabled", avoid dependency installation/deployment commands.
+      6) If capability_profile == "external_enabled", dependency installs and external tooling are allowed when needed.
+      7) Prefer robust commands (heredoc/multi-line files) over fragile one-line quoting for large files.
+      8) Use action_type="external_call" for external retrieval/dispatch needs:
+         semantic_search, mcp_call, rpc_emit, web_fetch.
+    input_schema: ActionInput
+    output_schema: ActionResult
+
+  - id: memory_store
+    type: store
+    label: "Agent Memory"
+    store_type: vector
+    schema: MemoryEntry
+    retention: session
+
+  - id: workspace
+    type: store
+    label: "Workspace"
+    store_type: kv
+    schema: WorkspaceEntry
+    retention: session
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: set_goal
+    type: step
+    label: "Set Goal"
+    description: "Accept the user's objective and initialize the agent"
+    data_out: PlanInput
+    logic: |
+      import os
+      _obj = state.data.get("objective") or state.data.get("text") or ""
+      if not isinstance(_obj, str):
+          _obj = str(_obj)
+      state.data["objective"] = _obj.strip()
+      _workspace_dir = state.data.get("workspace_dir") or os.environ.get("AGENT_ONTOLOGY_WORKSPACE_DIR") or os.path.join(os.getcwd(), "autogpt_workspace")
+      os.makedirs(_workspace_dir, exist_ok=True)
+      state.data["workspace_dir"] = _workspace_dir
+      _cap = str(state.data.get("capability_profile") or os.environ.get("AGENT_ONTOLOGY_CAPABILITY_PROFILE", "restricted")).strip().lower()
+      if _cap in {"external", "unshackled", "full"}:
+          _cap = "external_enabled"
+      if _cap not in {"restricted", "external_enabled"}:
+          _cap = "restricted"
+      state.data["capability_profile"] = _cap
+      _mock = str(state.data.get("mock_mode") or os.environ.get("AGENT_ONTOLOGY_MOCK_MODE", "deterministic")).strip().lower()
+      if _mock in {"off", "none", "disabled"}:
+          _mock = "live"
+      if _mock not in {"deterministic", "live", "llm_mock"}:
+          _mock = "deterministic"
+      state.data["mock_mode"] = _mock
+      state.data["completed_steps"] = []
+      state.data["current_step_idx"] = 0
+      state.data["criticism_count"] = 0
+      state.data["max_criticism_retries"] = 3
+      state.data["verify_retry_count"] = int(state.data.get("verify_retry_count", 0) or 0)
+      state.data["verification_fail_count"] = int(state.data.get("verification_fail_count", 0) or 0)
+      state.data["max_verify_retries"] = int(state.data.get("max_verify_retries", 2) or 2)
+      if not isinstance(state.data.get("checkpoint"), dict):
+          state.data["checkpoint"] = {}
+      if not isinstance(state.data.get("checkpoints"), list):
+          state.data["checkpoints"] = []
+      state.data["resume_requested"] = bool(state.data.get("resume_requested", False))
+      state.data["constraints"] = state.data.get("constraints", [])
+      state.data["results"] = []
+      print(f"    Goal: {state.data.get('objective', '')}")
+      print(f"    Workspace: {state.data.get('workspace_dir', '')}")
+      print(f"    Capability profile: {state.data.get('capability_profile', 'restricted')}")
+      print(f"    External mode: {state.data.get('mock_mode', 'deterministic')}")
+
+  - id: resume_checkpoint
+    type: step
+    label: "Resume Checkpoint"
+    description: "Restore selected runtime fields from checkpoint when requested"
+    logic: |
+      checkpoint = state.data.get("checkpoint")
+      resume_requested = bool(state.data.get("resume_requested", False))
+      if not resume_requested or not isinstance(checkpoint, dict):
+          state.data["resume_applied"] = False
+      else:
+          restored_keys = []
+          for key in [
+              "plan",
+              "current_step_idx",
+              "results",
+              "completed_steps",
+              "verify_retry_count",
+              "verification_fail_count",
+          ]:
+              if key in checkpoint:
+                  state.data[key] = checkpoint.get(key)
+                  restored_keys.append(key)
+          state.data["resume_applied"] = True
+          state.data["resume_restored_keys"] = restored_keys
+          state.data["resume_requested"] = False
+          print(f"    Restored checkpoint fields: {', '.join(restored_keys) if restored_keys else '(none)'}")
+
+  - id: decompose
+    type: step
+    label: "Decompose"
+    description: "Break the objective into a plan of concrete steps"
+    data_in: PlanInput
+    data_out: Plan
+
+  - id: think
+    type: step
+    label: "Think"
+    description: "Reason about the current step and propose an action"
+    data_in: ThinkInput
+    data_out: Thought
+    logic: |
+      plan = state.data.get("plan", [])
+      if not isinstance(plan, list):
+          plan = []
+      _obj = str(state.data.get("objective", "")).lower()
+      _todo_full_app = ("todo" in _obj) and ("full app" in _obj or "full application" in _obj)
+      _env_setup_markers = ["git", "venv", "virtual environment", "install", "dependency", "package manager"]
+      _env_setup_frontloaded = any(
+          any(tok in str(step or "").lower() for tok in _env_setup_markers)
+          for step in plan[:2]
+      )
+      if _todo_full_app and (len(plan) < 6 or _env_setup_frontloaded):
+          plan = [
+              "Create project structure and starter files for a dependency-free Python todo app",
+              "Implement local todo storage and CRUD operations using Python standard library only",
+              "Implement HTTP endpoints and CLI commands for create/list/complete/delete todo items",
+              "Add tests or smoke-check scripts validating todo CRUD behavior",
+              "Run local verification commands and fix issues found",
+              "Write README with run and usage instructions",
+          ]
+          state.data["plan"] = plan
+      if not plan:
+          plan = [
+              "Define MVP requirements and architecture for a todo app",
+              "Create project skeleton and dependencies",
+              "Implement backend/API and persistence for todos",
+              "Implement UI for create/list/update/delete todo items",
+              "Add tests and run them",
+              "Write README with run instructions",
+          ]
+          state.data["plan"] = plan
+      state.data["total_steps"] = len(plan)
+      idx = state.data.get("current_step_idx", 0)
+      if idx < len(plan):
+          state.data["current_step"] = plan[idx]
+      else:
+          state.data["current_step"] = "Review and finalize results"
+      state.data["stored_memories"] = [e.get("text", "") for e in state.data.get("memory_store", []) if e.get("text")][-5:]
+      print(f"    Step {idx + 1}/{len(plan)}: {state.data.get('current_step', '')[:100]}")
+
+  - id: criticize
+    type: step
+    label: "Criticize"
+    description: "Self-critique the proposed thought and action"
+    data_in: CriticInput
+    data_out: Criticism
+
+  - id: critic_gate
+    type: gate
+    label: "Critic approved?"
+    condition: "rating >= 7"
+    branches:
+      - condition: "rejected (rating < 7)"
+        target: handle_rejection
+      - condition: "approved (rating >= 7)"
+        target: act
+
+  - id: handle_rejection
+    type: step
+    label: "Handle Rejection"
+    description: "Process critic feedback and retry or skip"
+    logic: |
+      count = state.data.get("criticism_count", 0) + 1
+      state.data["criticism_count"] = count
+      max_retries = state.data.get("max_criticism_retries", 3)
+      if count >= max_retries:
+          print(f"    Max retries ({max_retries}) reached, proceeding anyway")
+      else:
+          state.data["feedback"] = state.data.get("improvements", "Try a different approach")
+          print(f"    Retry {count}/{max_retries}: {state.data.get('improvements', '')[:100]}")
+
+  - id: retry_or_proceed
+    type: gate
+    label: "Retry or proceed?"
+    condition: "criticism_count >= max_criticism_retries"
+    branches:
+      - condition: "under retry limit"
+        target: think
+      - condition: "at retry limit"
+        target: act
+
+  - id: act
+    type: step
+    label: "Act"
+    description: "Execute the approved action"
+    data_in: ActionInput
+    data_out: ActionResult
+    logic: |
+      action = state.data.get("proposed_action", "")
+      print(f"    Executing: {action[:100]}")
+      _atype = str(state.data.get("action_type", "") or "").strip().lower()
+      if _atype in {"external", "externalcall"}:
+          _atype = "external_call"
+      elif _atype in {"none", "skip", "no_action"}:
+          _atype = "none"
+      elif _atype not in {"command", "external_call"}:
+          _atype = "command"
+      state.data["action_type"] = _atype
+      if not isinstance(state.data.get("payload"), dict):
+          state.data["payload"] = {}
+      if _atype != "external_call":
+          state.data["interface_name"] = str(state.data.get("interface_name", "") or "")
+      state.data["use_external_call"] = _atype == "external_call"
+
+      _telemetry = state.data.get("routing_telemetry", {})
+      if not isinstance(_telemetry, dict):
+          _telemetry = {}
+      _telemetry.setdefault("policy_forced_external", 0)
+      _telemetry.setdefault("heuristic_semantic_fallback", 0)
+      _telemetry.setdefault("external_interface_repaired", 0)
+      _telemetry.setdefault("semantic_fallback_dispatches", 0)
+      state.data["routing_telemetry"] = _telemetry
+
+      _policy = state.data.get("routing_policy", {})
+      if not isinstance(_policy, dict):
+          _policy = {}
+      _policy_force = str(_policy.get("force_action_type") or _policy.get("action_type") or "").strip().lower()
+      if _policy_force in {"external", "externalcall"}:
+          _policy_force = "external_call"
+      _policy_prefers_external = bool(_policy.get("prefer_external_call", False)) or _policy_force == "external_call"
+      _policy_iface = str(_policy.get("preferred_interface") or _policy.get("interface_name") or "").strip()
+      _policy_query = str(_policy.get("query") or "").strip()
+      _policy_reason = str(_policy.get("reason") or "").strip()
+      if _policy_prefers_external and _atype != "external_call":
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          _query_fallback = str(state.data.get("proposed_action") or state.data.get("current_step") or state.data.get("objective") or "").strip()
+          _iface = _policy_iface or "semantic_search"
+          if _iface in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+              _iface = "semantic_search"
+          if _iface in {"mcp_tool_call"}:
+              _iface = "mcp_call"
+          if _iface in {"rpc_event"}:
+              _iface = "rpc_emit"
+          if _iface in {"semantic_search"}:
+              _payload.setdefault("query", _policy_query or _query_fallback)
+          elif _iface in {"mcp_call"}:
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _policy_query or _query_fallback})
+          elif _iface in {"rpc_emit"}:
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _policy_query or _query_fallback})
+          state.data["action_type"] = "external_call"
+          state.data["interface_name"] = _iface
+          state.data["payload"] = _payload
+          state.data["command"] = ""
+          state.data["use_external_call"] = True
+          state.data["routing_override_reason"] = "routing_policy_prefers_external_call"
+          _telemetry["policy_forced_external"] = int(_telemetry.get("policy_forced_external", 0) or 0) + 1
+          if _policy_reason:
+              state.data["routing_override_policy_reason"] = _policy_reason
+          _atype = "external_call"
+          print(f"    Routing policy override: external_call via {_iface}")
+
+      # Deterministic routing override:
+      # For retrieval-oriented tasks, prefer typed external_call over shell path.
+      _objective = str(state.data.get("objective", "") or "").lower()
+      _step = str(state.data.get("current_step", "") or "").lower()
+      _action = str(state.data.get("proposed_action", "") or "").lower()
+      _reasoning = str(state.data.get("reasoning", "") or "").lower()
+      _intent_text = " ".join([_objective, _step, _action, _reasoning])
+      _focus_text = " ".join([_step, _action, _reasoning])
+      _step_action_text = " ".join([_step, _action])
+      _iface_current = str(state.data.get("interface_name", "") or "").strip()
+      _iface_norm = _iface_current
+      if _iface_norm in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+          _iface_norm = "semantic_search"
+      if _iface_norm in {"mcp_tool_call"}:
+          _iface_norm = "mcp_call"
+      if _iface_norm in {"rpc_event"}:
+          _iface_norm = "rpc_emit"
+      if _iface_norm != _iface_current:
+          state.data["interface_name"] = _iface_norm
+      _supported_ifaces = {"semantic_search", "mcp_call", "rpc_emit"}
+      _retrieval_markers = [
+          "research", "look up", "lookup", "find information", "find sources",
+          "search", "retrieve", "evidence", "citations", "reference",
+          "wikipedia", "web", "mcp", "semantic", "what is", "who is",
+      ]
+      _build_markers = [
+          "build", "implement", "create file", "write code", "refactor",
+          "unit test", "pytest", "ci", "compile", "todo app", "application",
+      ]
+      _looks_retrieval = any(m in _intent_text for m in _retrieval_markers)
+      _focus_retrieval = any(m in _focus_text for m in _retrieval_markers)
+      _looks_build = any(m in _intent_text for m in _build_markers)
+      _focus_build = any(m in _step_action_text for m in _build_markers)
+      _current_cmd = str(state.data.get("command", "") or "").strip().lower()
+      _cmd_is_retrievalish = any(tok in _current_cmd for tok in ["curl ", "wget ", "http://", "https://", "wikipedia", "search"])
+      if _atype == "external_call" and _iface_norm not in _supported_ifaces:
+          _repair_query = str(
+              state.data.get("proposed_action")
+              or state.data.get("current_step")
+              or state.data.get("objective")
+              or ""
+          ).strip()
+          if "mcp" in _intent_text:
+              _repair_iface = "mcp_call"
+          elif any(tok in _intent_text for tok in ["rpc", "event", "emit"]):
+              _repair_iface = "rpc_emit"
+          else:
+              _repair_iface = "semantic_search"
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          if _repair_iface == "semantic_search":
+              _payload.setdefault("query", _repair_query)
+          elif _repair_iface == "mcp_call":
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _repair_query})
+          elif _repair_iface == "rpc_emit":
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _repair_query})
+          state.data["interface_name"] = _repair_iface
+          state.data["payload"] = _payload
+          state.data["routing_override_reason"] = "external_call_interface_repaired"
+          _telemetry["external_interface_repaired"] = int(_telemetry.get("external_interface_repaired", 0) or 0) + 1
+          _iface_norm = _repair_iface
+          print(f"    Routing repair: external_call interface normalized to {_repair_iface}")
+      _should_override = (
+          (not _policy_prefers_external)
+          and
+          (_atype != "external_call")
+          and (not _current_cmd or _cmd_is_retrievalish)
+          and (
+              _focus_retrieval
+              or (_looks_retrieval and (not _looks_build))
+              or (_looks_retrieval and _cmd_is_retrievalish and (not _focus_build))
+          )
+      )
+      if _should_override:
+          _query = str(state.data.get("proposed_action") or state.data.get("current_step") or state.data.get("objective") or "").strip()
+          _iface = str(state.data.get("interface_name", "") or "").strip()
+          if not _iface:
+              if "mcp" in _intent_text:
+                  _iface = "mcp_call"
+              elif any(tok in _intent_text for tok in ["rpc", "event", "emit"]):
+                  _iface = "rpc_emit"
+              else:
+                  _iface = "semantic_search"
+          if _iface in {"mcp_tool_call"}:
+              _iface = "mcp_call"
+          if _iface in {"rpc_event"}:
+              _iface = "rpc_emit"
+          if _iface in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+              _iface = "semantic_search"
+          if ("mcp" in _intent_text) and _iface in {"semantic_search"}:
+              _iface = "mcp_call"
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          if _iface in {"semantic_search", "search", "web_fetch", "lookup", "wikipedia_lookup"}:
+              _payload.setdefault("query", _query)
+          elif _iface in {"mcp_call", "mcp_tool_call"}:
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _query})
+          elif _iface in {"rpc_emit", "rpc_event"}:
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _query})
+          state.data["action_type"] = "external_call"
+          state.data["interface_name"] = _iface
+          state.data["payload"] = _payload
+          state.data["command"] = ""
+          state.data["use_external_call"] = True
+          state.data["routing_override_reason"] = "retrieval_intent_prefers_external_call"
+          _telemetry["heuristic_semantic_fallback"] = int(_telemetry.get("heuristic_semantic_fallback", 0) or 0) + 1
+          state.data["semantic_fallback_count"] = int(state.data.get("semantic_fallback_count", 0) or 0) + 1
+          _fallback_events = state.data.get("semantic_fallback_events", [])
+          if not isinstance(_fallback_events, list):
+              _fallback_events = []
+          _fallback_events.append(
+              {
+                  "from_action_type": _atype,
+                  "to_interface": _iface,
+                  "query": _query,
+                  "reason": "retrieval_intent_prefers_external_call",
+              }
+          )
+          state.data["semantic_fallback_events"] = _fallback_events[-20:]
+          print(f"    Routing override: external_call via {_iface}")
+
+  - id: execution_mode_gate
+    type: gate
+    label: "External Action?"
+    condition: "action_type == external_call"
+    branches:
+      - condition: "external call requested"
+        target: execute_external_call
+      - condition: "command/none"
+        target: execute_command
+
+  - id: normalize_action_routing
+    type: step
+    label: "Normalize Action Routing"
+    description: "Apply deterministic routing preferences after executor output"
+    data_in: ActionResult
+    data_out: ActionResult
+    logic: |
+      _atype = str(state.data.get("action_type", "") or "").strip().lower()
+      if _atype in {"external", "externalcall"}:
+          _atype = "external_call"
+      elif _atype in {"none", "skip", "no_action"}:
+          _atype = "none"
+      elif _atype not in {"command", "external_call"}:
+          _atype = "command"
+      state.data["action_type"] = _atype
+
+      if not isinstance(state.data.get("payload"), dict):
+          state.data["payload"] = {}
+      if _atype != "external_call":
+          state.data["interface_name"] = str(state.data.get("interface_name", "") or "")
+      state.data["use_external_call"] = _atype == "external_call"
+
+      _policy = state.data.get("routing_policy", {})
+      if not isinstance(_policy, dict):
+          _policy = {}
+      _policy_force = str(_policy.get("force_action_type") or _policy.get("action_type") or "").strip().lower()
+      if _policy_force in {"external", "externalcall"}:
+          _policy_force = "external_call"
+      _policy_prefers_external = bool(_policy.get("prefer_external_call", False)) or _policy_force == "external_call"
+      _policy_iface = str(_policy.get("preferred_interface") or _policy.get("interface_name") or "").strip()
+      _policy_query = str(_policy.get("query") or "").strip()
+      _policy_reason = str(_policy.get("reason") or "").strip()
+      if _policy_prefers_external and _atype != "external_call":
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          _query_fallback = str(state.data.get("proposed_action") or state.data.get("current_step") or state.data.get("objective") or "").strip()
+          _iface = _policy_iface or "semantic_search"
+          if _iface in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+              _iface = "semantic_search"
+          if _iface in {"mcp_tool_call"}:
+              _iface = "mcp_call"
+          if _iface in {"rpc_event"}:
+              _iface = "rpc_emit"
+          if _iface in {"semantic_search"}:
+              _payload.setdefault("query", _policy_query or _query_fallback)
+          elif _iface in {"mcp_call"}:
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _policy_query or _query_fallback})
+          elif _iface in {"rpc_emit"}:
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _policy_query or _query_fallback})
+          state.data["action_type"] = "external_call"
+          state.data["interface_name"] = _iface
+          state.data["payload"] = _payload
+          state.data["command"] = ""
+          state.data["use_external_call"] = True
+          state.data["routing_override_reason"] = "routing_policy_prefers_external_call"
+          if _policy_reason:
+              state.data["routing_override_policy_reason"] = _policy_reason
+          _atype = "external_call"
+          print(f"    Routing policy override: external_call via {_iface}")
+
+      # Deterministic routing override:
+      # For retrieval-oriented tasks, prefer typed external_call over shell path.
+      _objective = str(state.data.get("objective", "") or "").lower()
+      _step = str(state.data.get("current_step", "") or "").lower()
+      _action = str(state.data.get("proposed_action", "") or "").lower()
+      _reasoning = str(state.data.get("reasoning", "") or "").lower()
+      _intent_text = " ".join([_objective, _step, _action, _reasoning])
+      _focus_text = " ".join([_step, _action, _reasoning])
+      _step_action_text = " ".join([_step, _action])
+      _iface_current = str(state.data.get("interface_name", "") or "").strip()
+      _iface_norm = _iface_current
+      if _iface_norm in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+          _iface_norm = "semantic_search"
+      if _iface_norm in {"mcp_tool_call"}:
+          _iface_norm = "mcp_call"
+      if _iface_norm in {"rpc_event"}:
+          _iface_norm = "rpc_emit"
+      if _iface_norm != _iface_current:
+          state.data["interface_name"] = _iface_norm
+      _supported_ifaces = {"semantic_search", "mcp_call", "rpc_emit"}
+      _retrieval_markers = [
+          "research", "look up", "lookup", "find information", "find sources",
+          "search", "retrieve", "evidence", "citations", "reference",
+          "wikipedia", "web", "mcp", "semantic", "what is", "who is",
+      ]
+      _build_markers = [
+          "build", "implement", "create file", "write code", "refactor",
+          "unit test", "pytest", "ci", "compile", "todo app", "application",
+      ]
+      _looks_retrieval = any(m in _intent_text for m in _retrieval_markers)
+      _focus_retrieval = any(m in _focus_text for m in _retrieval_markers)
+      _looks_build = any(m in _intent_text for m in _build_markers)
+      _focus_build = any(m in _step_action_text for m in _build_markers)
+      _current_cmd = str(state.data.get("command", "") or "").strip().lower()
+      _cmd_is_retrievalish = any(tok in _current_cmd for tok in ["curl ", "wget ", "http://", "https://", "wikipedia", "search"])
+      if _atype == "external_call" and _iface_norm not in _supported_ifaces:
+          _repair_query = str(
+              state.data.get("proposed_action")
+              or state.data.get("current_step")
+              or state.data.get("objective")
+              or ""
+          ).strip()
+          if "mcp" in _intent_text:
+              _repair_iface = "mcp_call"
+          elif any(tok in _intent_text for tok in ["rpc", "event", "emit"]):
+              _repair_iface = "rpc_emit"
+          else:
+              _repair_iface = "semantic_search"
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          if _repair_iface == "semantic_search":
+              _payload.setdefault("query", _repair_query)
+          elif _repair_iface == "mcp_call":
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _repair_query})
+          elif _repair_iface == "rpc_emit":
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _repair_query})
+          state.data["interface_name"] = _repair_iface
+          state.data["payload"] = _payload
+          state.data["routing_override_reason"] = "external_call_interface_repaired"
+          _telemetry["external_interface_repaired"] = int(_telemetry.get("external_interface_repaired", 0) or 0) + 1
+          _iface_norm = _repair_iface
+          print(f"    Routing repair: external_call interface normalized to {_repair_iface}")
+      _should_override = (
+          (not _policy_prefers_external)
+          and
+          (_atype != "external_call")
+          and (not _current_cmd or _cmd_is_retrievalish)
+          and (
+              _focus_retrieval
+              or (_looks_retrieval and (not _looks_build))
+              or (_looks_retrieval and _cmd_is_retrievalish and (not _focus_build))
+          )
+      )
+      if _should_override:
+          _query = str(state.data.get("proposed_action") or state.data.get("current_step") or state.data.get("objective") or "").strip()
+          _iface = str(state.data.get("interface_name", "") or "").strip()
+          if not _iface:
+              if "mcp" in _intent_text:
+                  _iface = "mcp_call"
+              elif any(tok in _intent_text for tok in ["rpc", "event", "emit"]):
+                  _iface = "rpc_emit"
+              else:
+                  _iface = "semantic_search"
+          if _iface in {"mcp_tool_call"}:
+              _iface = "mcp_call"
+          if _iface in {"rpc_event"}:
+              _iface = "rpc_emit"
+          if _iface in {"search", "lookup", "wikipedia_lookup", "web_fetch"}:
+              _iface = "semantic_search"
+          if ("mcp" in _intent_text) and _iface in {"semantic_search"}:
+              _iface = "mcp_call"
+          _payload = state.data.get("payload", {})
+          if not isinstance(_payload, dict):
+              _payload = {}
+          if _iface in {"semantic_search", "search", "web_fetch", "lookup", "wikipedia_lookup"}:
+              _payload.setdefault("query", _query)
+          elif _iface in {"mcp_call", "mcp_tool_call"}:
+              _payload.setdefault("tool", "search")
+              _payload.setdefault("args", {"query": _query})
+          elif _iface in {"rpc_emit", "rpc_event"}:
+              _payload.setdefault("rpc_method", "delegate_retrieval")
+              _payload.setdefault("payload", {"query": _query})
+          state.data["action_type"] = "external_call"
+          state.data["interface_name"] = _iface
+          state.data["payload"] = _payload
+          state.data["command"] = ""
+          state.data["use_external_call"] = True
+          state.data["routing_override_reason"] = "retrieval_intent_prefers_external_call"
+          print(f"    Routing override: external_call via {_iface}")
+
+  - id: execute_external_call
+    type: step
+    label: "Execute External Call"
+    description: "Dispatch typed external interface request through adapter"
+    data_in: ActionResult
+    logic: |
+      import json
+
+      cap = str(state.data.get("capability_profile", "restricted") or "restricted").strip().lower()
+      if cap in {"external", "unshackled", "full"}:
+          cap = "external_enabled"
+      if cap not in {"restricted", "external_enabled"}:
+          cap = "restricted"
+      state.data["capability_profile"] = cap
+
+      action_type = str(state.data.get("action_type", "command") or "command").strip().lower()
+      if action_type in {"external", "externalcall"}:
+          action_type = "external_call"
+      state.data["action_type"] = action_type
+
+      iface = str(state.data.get("interface_name", "") or "").strip()
+      payload = state.data.get("payload", {})
+      if not isinstance(payload, dict):
+          payload = {"value": payload}
+      state.data["payload"] = payload
+      state.data["executed_interface"] = iface
+      _telemetry = state.data.get("routing_telemetry", {})
+      if not isinstance(_telemetry, dict):
+          _telemetry = {}
+      _telemetry.setdefault("semantic_fallback_dispatches", 0)
+      state.data["routing_telemetry"] = _telemetry
+
+      if action_type != "external_call":
+          if not state.data.get("action_result"):
+              state.data["action_result"] = "No external call requested."
+          state.data["success"] = bool(state.data.get("success", False))
+      elif not iface:
+          state.data["action_result"] = "Missing interface_name for external_call."
+          state.data["success"] = False
+      elif cap != "external_enabled":
+          state.data["action_result"] = f"Blocked by capability profile ({cap}): external_call {iface}"
+          state.data["success"] = False
+      else:
+          _ext = _external_tool_dispatch(iface, payload)
+          if not isinstance(_ext, dict):
+              _ext = {"handled": False, "ok": False, "error": f"Invalid external adapter response: {type(_ext).__name__}"}
+          _fallback_used = False
+          _handled = bool(_ext.get("handled", False))
+          _ok_pre = bool(_ext.get("ok", False))
+          _err_pre = str(_ext.get("error", "") or "").strip().lower()
+          _needs_semantic_fallback = (not _handled) or ((not _ok_pre) and ("did not handle interface" in _err_pre))
+          if _needs_semantic_fallback and iface and iface != "semantic_search":
+              _fallback_query = str(
+                  payload.get("query")
+                  or state.data.get("proposed_action")
+                  or state.data.get("current_step")
+                  or state.data.get("objective")
+                  or ""
+              ).strip()
+              _fallback_payload = {"query": _fallback_query}
+              _fallback = _external_tool_dispatch("semantic_search", _fallback_payload)
+              if not isinstance(_fallback, dict):
+                  _fallback = {
+                      "handled": False,
+                      "ok": False,
+                      "error": f"Invalid external adapter response: {type(_fallback).__name__}",
+                  }
+              state.data["semantic_fallback_dispatch"] = {
+                  "from_interface": iface,
+                  "to_interface": "semantic_search",
+                  "query": _fallback_query,
+                  "trigger": "unhandled_external_interface",
+                  "initial_result": _ext,
+                  "fallback_result": _fallback,
+              }
+              _telemetry["semantic_fallback_dispatches"] = int(_telemetry.get("semantic_fallback_dispatches", 0) or 0) + 1
+              state.data["semantic_fallback_count"] = int(state.data.get("semantic_fallback_count", 0) or 0) + 1
+              _fallback_events = state.data.get("semantic_fallback_events", [])
+              if not isinstance(_fallback_events, list):
+                  _fallback_events = []
+              _fallback_events.append(
+                  {
+                      "from_interface": iface,
+                      "to_interface": "semantic_search",
+                      "query": _fallback_query,
+                      "reason": "unhandled_external_interface",
+                  }
+              )
+              state.data["semantic_fallback_events"] = _fallback_events[-20:]
+              if bool(_fallback.get("handled", False)):
+                  _ext = _fallback
+                  iface = "semantic_search"
+                  state.data["executed_interface"] = iface
+                  state.data["interface_name"] = iface
+                  _fallback_used = True
+          state.data["external_result"] = _ext
+          _ok = bool(_ext.get("ok", False))
+          _txt = str(_ext.get("text", "") or "").strip()
+          _err = str(_ext.get("error", "") or "").strip()
+          _provider = str(_ext.get("provider", "") or "").strip()
+          _mode = str(_ext.get("mode", "") or "").strip()
+          if _txt:
+              _summary = _txt
+          elif _err:
+              _summary = f"External call error: {_err}"
+          else:
+              try:
+                  _summary = json.dumps(_ext, default=str, ensure_ascii=False)
+              except Exception:
+                  _summary = str(_ext)
+          if _provider or _mode:
+              _summary = f"[{_provider or 'external'} mode={_mode or 'unknown'}] {_summary}"
+          if _fallback_used:
+              _summary = f"[semantic_fallback {state.data.get('semantic_fallback_dispatch', {}).get('from_interface', '')}->semantic_search] {_summary}"
+          state.data["action_result"] = _summary
+          state.data["success"] = _ok
+
+      step_idx = state.data.get("current_step_idx", 0)
+      state.data["key"] = f"step_{step_idx}"
+      state.data["value"] = state.data.get("action_result", "")
+
+  - id: execute_command
+    type: step
+    label: "Execute Command"
+    description: "Run executor-generated shell command in workspace and capture output"
+    data_in: ActionResult
+    logic: |
+      import os
+      import subprocess
+
+      workspace_dir = state.data.get("workspace_dir") or os.getcwd()
+      os.makedirs(workspace_dir, exist_ok=True)
+      timeout_seconds = int(os.environ.get("AGENT_ONTOLOGY_COMMAND_TIMEOUT", "30") or "30")
+
+      cmd = str(state.data.get("command", "") or "").strip()
+      if cmd.upper() in {"NONE", "N/A", "SKIP"}:
+          cmd = ""
+      action_type = str(state.data.get("action_type", "command") or "command").strip().lower()
+      if action_type in {"external", "externalcall"}:
+          action_type = "external_call"
+      state.data["action_type"] = action_type
+      cmd_lower = cmd.lower()
+      state.data["executed_command"] = cmd
+      cap = str(state.data.get("capability_profile", "restricted") or "restricted").strip().lower()
+      if cap in {"external", "unshackled", "full"}:
+          cap = "external_enabled"
+      if cap not in {"restricted", "external_enabled"}:
+          cap = "restricted"
+      state.data["capability_profile"] = cap
+
+      # If the executor returned no command for a build/coding objective,
+      # emit a safe scaffold command so runs still generate concrete files.
+      _intent_text = " ".join(
+          [
+              str(state.data.get("objective", "") or ""),
+              str(state.data.get("current_step", "") or ""),
+              str(state.data.get("proposed_action", "") or ""),
+          ]
+      ).lower()
+      _build_markers = [
+          "build",
+          "implement",
+          "create",
+          "write code",
+          "todo",
+          "api",
+          "app",
+          "project",
+          "service",
+      ]
+      _build_intent = any(m in _intent_text for m in _build_markers)
+
+      def _apply_autofallback(reason):
+          nonlocal cmd, cmd_lower
+          cmd = "\n".join(
+              [
+                  "mkdir -p src tests",
+                  "cat > README.md <<'EOF'",
+                  "# AutoGPT Workspace Bootstrap",
+                  "",
+                  "This workspace was initialized automatically because command execution could not continue safely.",
+                  f"Reason: {str(reason or '').replace(chr(10), ' ')}",
+                  "EOF",
+                  "cat > src/main.py <<'EOF'",
+                  "def main():",
+                  "    return 'todo app bootstrap'",
+                  "",
+                  "if __name__ == '__main__':",
+                  "    print(main())",
+                  "EOF",
+                  "cat > tests/test_smoke.py <<'EOF'",
+                  "from src.main import main",
+                  "",
+                  "def test_smoke():",
+                  "    assert main() == 'todo app bootstrap'",
+                  "EOF",
+              ]
+          )
+          cmd_lower = cmd.lower()
+          state.data["command"] = cmd
+          state.data["executed_command"] = cmd
+          state.data["autofallback_generated_command"] = True
+          state.data["autofallback_reason"] = reason
+          print(f"    Auto-generated fallback scaffold command ({reason})")
+
+      def _run_shell(command_text):
+          try:
+              result = subprocess.run(
+                  command_text,
+                  shell=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=max(5, timeout_seconds),
+                  cwd=workspace_dir,
+              )
+              _stdout = (result.stdout or "").strip()
+              _stderr = (result.stderr or "").strip()
+              _parts = []
+              if _stdout:
+                  _parts.append(_stdout)
+              if _stderr:
+                  _parts.append(f"STDERR: {_stderr}")
+              if not _parts:
+                  _parts.append("(no output)")
+              return result.returncode == 0, "\n".join(_parts), _stderr
+          except subprocess.TimeoutExpired:
+              return False, f"Command timed out after {timeout_seconds}s", "timeout"
+          except Exception as exc:
+              _msg = f"Command execution error: {type(exc).__name__}: {exc}"
+              return False, _msg, _msg
+
+      if action_type != "external_call" and (not cmd) and _build_intent:
+          _apply_autofallback("empty_command_for_build_intent")
+
+      if action_type == "external_call":
+          if not state.data.get("action_result"):
+              state.data["action_result"] = f"External call routed separately: {state.data.get('interface_name', '')}"
+          state.data["success"] = bool(state.data.get("success", False))
+      elif not cmd:
+          if not state.data.get("action_result"):
+              state.data["action_result"] = "No executable command returned; kept planning result only."
+          state.data["success"] = bool(state.data.get("success", False))
+      elif any(tok in cmd_lower for tok in [
+          "rm -rf",
+          "git reset --hard",
+          "mkfs",
+          "dd if=",
+          ":(){:|:&};:",
+      ]):
+          state.data["action_result"] = f"Blocked potentially destructive or long-running command: {cmd}"
+          state.data["success"] = False
+      elif cap != "external_enabled" and any(tok in cmd_lower for tok in [
+          "npm install",
+          "pnpm install",
+          "yarn install",
+          "pip install",
+          "poetry install",
+          "npx ",
+          "npm create",
+          "pnpm create",
+          "yarn create",
+          "create-react-app",
+          "docker build",
+          "docker run",
+          "kubectl",
+          "terraform apply",
+          "vercel",
+          "netlify",
+          "heroku",
+          "aws deploy",
+      ]):
+          state.data["action_result"] = f"Blocked by capability profile ({cap}): {cmd}"
+          state.data["success"] = False
+      elif any(tok in cmd_lower for tok in [
+          "sudo ",
+          "apt-get ",
+          "yum ",
+          "dnf ",
+          "pacman ",
+          "brew install",
+          "choco install",
+      ]):
+          if action_type != "external_call" and _build_intent:
+              _original = cmd
+              state.data["autofallback_original_command"] = _original
+              _apply_autofallback("blocked_privileged_or_package_manager_command")
+              _ok, _msg, _stderr = _run_shell(cmd)
+              state.data["action_result"] = (
+                  "Original command was replaced by a safe local scaffold.\n"
+                  f"Original: {_original}\n{_msg}"
+              )
+              state.data["success"] = _ok
+          else:
+              state.data["action_result"] = f"Blocked privileged or package-manager command: {cmd}"
+              state.data["success"] = False
+      else:
+          _ok, _msg, _stderr = _run_shell(cmd)
+          if _ok:
+              state.data["action_result"] = _msg
+              state.data["success"] = True
+          else:
+              _err_l = "\n".join([_msg, _stderr]).lower()
+              _missing_tool = any(tok in _err_l for tok in [
+                  "command not found",
+                  "not found",
+                  "no such file or directory",
+                  "unable to locate package",
+              ])
+              if action_type != "external_call" and _build_intent and _missing_tool:
+                  _original = cmd
+                  _original_msg = _msg
+                  state.data["autofallback_original_command"] = _original
+                  _apply_autofallback("missing_tool_for_build_intent")
+                  _ok2, _msg2, _ = _run_shell(cmd)
+                  if _ok2:
+                      state.data["action_result"] = (
+                          "Original command failed due missing tooling; fallback scaffold executed.\n"
+                          f"Original: {_original}\n"
+                          f"Original output: {_original_msg}\n"
+                          f"{_msg2}"
+                      )
+                      state.data["success"] = True
+                  else:
+                      state.data["action_result"] = (
+                          f"{_original_msg}\nFallback also failed: {_msg2}"
+                      )
+                      state.data["success"] = False
+              else:
+                  state.data["action_result"] = _msg
+                  state.data["success"] = False
+
+      def _assess_workspace_file_quality():
+          _skip_dirs = {
+              ".git",
+              ".live_runs",
+              ".venv",
+              "venv",
+              "node_modules",
+              "__pycache__",
+          }
+          _text_exts = {
+              ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+              ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".sh", ".sql", ".csv",
+          }
+          _candidates = []
+          try:
+              for _root, _dirs, _names in os.walk(workspace_dir):
+                  _dirs[:] = [d for d in _dirs if d not in _skip_dirs]
+                  for _name in _names:
+                      _lname = _name.lower()
+                      if _lname.startswith("."):
+                          continue
+                      _is_candidate = (
+                          _lname in {"readme", "readme.md", "readme.txt"}
+                          or any(_lname.endswith(_ext) for _ext in _text_exts)
+                      )
+                      if not _is_candidate:
+                          continue
+                      _path = os.path.join(_root, _name)
+                      _rel = os.path.relpath(_path, workspace_dir)
+                      try:
+                          _size = int(os.path.getsize(_path))
+                      except Exception:
+                          _size = -1
+                      _candidates.append((_rel, _size))
+          except Exception:
+              return {
+                  "candidate_count": 0,
+                  "non_empty_count": 0,
+                  "empty_count": 0,
+                  "non_empty_files": [],
+                  "empty_files": [],
+              }
+          _candidates.sort(key=lambda t: t[0])
+          _non_empty = [rel for rel, size in _candidates if size > 0]
+          _empty = [rel for rel, size in _candidates if size == 0]
+          return {
+              "candidate_count": len(_candidates),
+              "non_empty_count": len(_non_empty),
+              "empty_count": len(_empty),
+              "non_empty_files": _non_empty[:20],
+              "empty_files": _empty[:20],
+          }
+
+      if action_type != "external_call" and _build_intent and bool(state.data.get("success", False)):
+          _quality = _assess_workspace_file_quality()
+          state.data["quality_file_check"] = _quality
+          _candidate_count = int(_quality.get("candidate_count", 0) or 0)
+          _non_empty_count = int(_quality.get("non_empty_count", 0) or 0)
+          if _candidate_count > 0 and _non_empty_count == 0:
+              _empty_preview = ", ".join(list(_quality.get("empty_files", []))[:5]) or "(unknown files)"
+              _prior = str(state.data.get("action_result", "") or "").strip()
+              _suffix = (
+                  "Quality gate failed: generated candidate files are all empty. "
+                  f"Examples: {_empty_preview}. Retry with real file contents."
+              )
+              state.data["action_result"] = f"{_prior}\n{_suffix}" if _prior else _suffix
+              state.data["success"] = False
+              state.data["quality_gate_failed"] = True
+              state.data["quality_gate_reason"] = "all_candidate_files_empty"
+          else:
+              state.data["quality_gate_failed"] = False
+              state.data.pop("quality_gate_reason", None)
+
+      step_idx = state.data.get("current_step_idx", 0)
+      state.data["key"] = f"step_{step_idx}"
+      state.data["value"] = state.data.get("action_result", "")
+
+  - id: observe
+    type: step
+    label: "Observe"
+    description: "Process the action result and update memory"
+    data_in: ActionResult
+    logic: |
+      result = state.data.get("action_result", "")
+      results = state.data.get("results", [])
+      results.append(result)
+      state.data["results"] = results
+      state.data["text"] = result
+      state.data["embedding"] = []
+      state.data["metadata"] = {
+          "step": state.data.get("current_step_idx", 0),
+          "action": state.data.get("proposed_action", ""),
+          "action_type": state.data.get("action_type", "command"),
+          "command": state.data.get("executed_command", ""),
+          "interface_name": state.data.get("executed_interface", state.data.get("interface_name", "")),
+          "capability_profile": state.data.get("capability_profile", "restricted"),
+          "success": bool(state.data.get("success", False)),
+      }
+      state.data["current_step_idx"] = state.data.get("current_step_idx", 0) + 1
+      state.data["criticism_count"] = 0
+      print(f"    Result recorded. Completed {state.data['current_step_idx']} steps.")
+
+  - id: checkpoint_state
+    type: step
+    label: "Checkpoint State"
+    description: "Persist compact checkpoint metadata for resume/replay"
+    logic: |
+      import datetime
+      snapshot = {
+          "created_at": datetime.datetime.now().isoformat(),
+          "current_step_idx": int(state.data.get("current_step_idx", 0) or 0),
+          "total_steps": int(state.data.get("total_steps", 0) or 0),
+          "current_step": str(state.data.get("current_step", "") or ""),
+          "last_action_type": str(state.data.get("action_type", "") or ""),
+          "last_success": bool(state.data.get("success", False)),
+          "results_count": len(state.data.get("results", []) if isinstance(state.data.get("results"), list) else []),
+          "plan": list(state.data.get("plan", []) if isinstance(state.data.get("plan"), list) else []),
+          "results": list(state.data.get("results", []) if isinstance(state.data.get("results"), list) else []),
+          "completed_steps": list(state.data.get("completed_steps", []) if isinstance(state.data.get("completed_steps"), list) else []),
+          "verify_retry_count": int(state.data.get("verify_retry_count", 0) or 0),
+          "verification_fail_count": int(state.data.get("verification_fail_count", 0) or 0),
+      }
+      state.data["checkpoint"] = snapshot
+      checkpoints = state.data.get("checkpoints", [])
+      if not isinstance(checkpoints, list):
+          checkpoints = []
+      checkpoints.append(snapshot)
+      state.data["checkpoints"] = checkpoints[-30:]
+
+  - id: verify_progress
+    type: step
+    label: "Verify Progress"
+    description: "Check latest action result against success + constraints; may request retry of current step"
+    logic: |
+      import datetime
+      constraints = state.data.get("constraints", [])
+      if not isinstance(constraints, list):
+          constraints = []
+      action_result = str(state.data.get("action_result", "") or "")
+      success = bool(state.data.get("success", False))
+      lc_result = action_result.lower()
+
+      matched_constraints = 0
+      for raw in constraints:
+          text = str(raw or "").strip().lower()
+          if not text:
+              continue
+          tokens = [tok for tok in text.split() if len(tok) >= 3]
+          if not tokens:
+              continue
+          if all(tok in lc_result for tok in tokens[:6]):
+              matched_constraints += 1
+
+      constraint_count = len([c for c in constraints if str(c or "").strip()])
+      constraints_ok = True
+      if constraint_count > 0:
+          constraints_ok = matched_constraints >= constraint_count
+      verification_passed = success and constraints_ok
+
+      state.data["verification_checked_at"] = datetime.datetime.now().isoformat()
+      state.data["verification_constraint_count"] = constraint_count
+      state.data["verification_matched_constraints"] = matched_constraints
+      state.data["verification_passed"] = verification_passed
+
+      if verification_passed:
+          state.data["verification_status"] = "pass"
+          state.data["verification_notes"] = "Latest action passed execution and constraint checks."
+          state.data["verify_retry_count"] = 0
+      else:
+          fail_count = int(state.data.get("verification_fail_count", 0) or 0) + 1
+          state.data["verification_fail_count"] = fail_count
+          retry_count = int(state.data.get("verify_retry_count", 0) or 0)
+          max_retries = int(state.data.get("max_verify_retries", 2) or 2)
+          if retry_count < max_retries:
+              state.data["verification_status"] = "retry"
+              state.data["verification_notes"] = "Verification failed; retrying current step."
+              state.data["verify_retry_count"] = retry_count + 1
+              current_idx = int(state.data.get("current_step_idx", 0) or 0)
+              state.data["current_step_idx"] = max(0, current_idx - 1)
+              state.data["feedback"] = f"Verification retry requested ({state.data['verify_retry_count']}/{max_retries})."
+          else:
+              state.data["verification_status"] = "failed_exhausted"
+              state.data["verification_notes"] = "Verification failed and retry budget exhausted; continuing."
+              state.data["feedback"] = "Verification failed but retry budget exhausted."
+
+  - id: check_done
+    type: gate
+    label: "All steps done?"
+    condition: "current_step_idx >= total_steps"
+    branches:
+      - condition: "not done"
+        target: think
+      - condition: "all done"
+        target: synthesize
+
+  - id: synthesize
+    type: step
+    label: "Synthesize"
+    description: "Combine all results into a final output"
+    logic: |
+      import os
+      results = state.data.get("results", [])
+      print(f"    Synthesizing {len(results)} results")
+      _workspace = state.data.get("workspace_dir", "")
+      _summary = results[-1] if results else "No execution results recorded."
+      _files = []
+      if isinstance(_workspace, str) and _workspace and os.path.isdir(_workspace):
+          for _root, _dirs, _names in os.walk(_workspace):
+              for _name in sorted(_names):
+                  _path = os.path.relpath(os.path.join(_root, _name), _workspace)
+                  _files.append(_path)
+                  if len(_files) >= 20:
+                      break
+              if len(_files) >= 20:
+                  break
+      state.data["artifact_files"] = _files
+      state.data["answer"] = (
+          f"Completed {len(results)} steps for objective: {state.data.get('objective', '')}\\n"
+          f"Capability profile: {state.data.get('capability_profile', 'restricted')}\\n"
+          f"Workspace: {_workspace}\\n"
+          f"Latest result:\\n{_summary}\\n"
+          f"Artifacts ({len(_files)} shown):\\n" + ("\\n".join(_files) if _files else "(no files found)")
+      )
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  - type: flow
+    from: set_goal
+    to: resume_checkpoint
+    label: "Restore checkpoint context"
+
+  - type: flow
+    from: resume_checkpoint
+    to: decompose
+    label: "Plan"
+
+  - type: invoke
+    from: decompose
+    to: planner
+    label: "Create plan"
+    input: PlanInput
+    output: Plan
+
+  - type: flow
+    from: decompose
+    to: think
+    label: "Start execution"
+
+  - type: invoke
+    from: think
+    to: thinker
+    label: "Reason about step"
+    input: ThinkInput
+    output: Thought
+
+  - type: flow
+    from: think
+    to: criticize
+    label: "Self-critique"
+
+  - type: invoke
+    from: criticize
+    to: critic
+    label: "Evaluate proposal"
+    input: CriticInput
+    output: Criticism
+
+  - type: flow
+    from: criticize
+    to: critic_gate
+    label: "Check approval"
+
+  - type: flow
+    from: handle_rejection
+    to: retry_or_proceed
+    label: "Check retry limit"
+
+  - type: invoke
+    from: act
+    to: executor
+    label: "Execute action"
+    input: ActionInput
+    output: ActionResult
+
+  - type: flow
+    from: act
+    to: normalize_action_routing
+    label: "Normalize action routing"
+
+  - type: flow
+    from: normalize_action_routing
+    to: execution_mode_gate
+    label: "Route execution type"
+
+  - type: branch
+    from: execution_mode_gate
+    to: execute_external_call
+    condition: "external call requested"
+    label: "Run external call"
+
+  - type: branch
+    from: execution_mode_gate
+    to: execute_command
+    condition: "command/none"
+    label: "Run command"
+
+  - type: flow
+    from: execute_external_call
+    to: observe
+    label: "Observe external result"
+
+  - type: flow
+    from: execute_command
+    to: observe
+    label: "Observe result"
+
+  - type: read
+    from: think
+    to: memory_store
+    label: "Read memory context"
+    data: MemoryEntry
+
+  - type: write
+    from: observe
+    to: memory_store
+    label: "Store memory"
+    data: MemoryEntry
+
+  - type: write
+    from: observe
+    to: workspace
+    label: "Update workspace"
+    data: WorkspaceEntry
+
+  - type: flow
+    from: observe
+    to: checkpoint_state
+    label: "Capture checkpoint"
+
+  - type: flow
+    from: checkpoint_state
+    to: verify_progress
+    label: "Verify latest step"
+
+  - type: flow
+    from: verify_progress
+    to: check_done
+    label: "Check progress"
+
+  - type: flow
+    from: check_done
+    to: synthesize
+    label: "All done"
+
+  - type: loop
+    from: check_done
+    to: think
+    label: "Next step"
+    condition: "current_step_idx < plan.length"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: PlanInput
+    description: "Input to the planner"
+    fields:
+      - { name: objective, type: string }
+      - { name: constraints, type: "list<string>" }
+
+  - name: Plan
+    description: "A plan of action steps"
+    fields:
+      - { name: plan, type: "list<string>" }
+      - { name: objective, type: string }
+
+  - name: ThinkInput
+    description: "Input to the thinker"
+    fields:
+      - { name: objective, type: string }
+      - { name: current_step, type: string }
+      - { name: results, type: "list<string>" }
+      - { name: stored_memories, type: "list<string>" }
+      - { name: feedback, type: string }
+
+  - name: Thought
+    description: "Reasoning output"
+    fields:
+      - { name: reasoning, type: string }
+      - { name: proposed_action, type: string }
+
+  - name: CriticInput
+    description: "Input to the critic"
+    fields:
+      - { name: objective, type: string }
+      - { name: current_step, type: string }
+      - { name: reasoning, type: string }
+      - { name: proposed_action, type: string }
+
+  - name: Criticism
+    description: "Critic evaluation"
+    fields:
+      - { name: rating, type: integer }
+      - { name: approved, type: boolean }
+      - { name: improvements, type: string }
+
+  - name: ActionInput
+    description: "Input to executor"
+    fields:
+      - { name: proposed_action, type: string }
+      - { name: current_step, type: string }
+      - { name: objective, type: string }
+      - { name: workspace_dir, type: string }
+      - { name: capability_profile, type: string }
+      - { name: mock_mode, type: string }
+
+  - name: ActionResult
+    description: "Result of action execution"
+    fields:
+      - { name: action_type, type: "enum[command, external_call, none]" }
+      - { name: command, type: string }
+      - { name: interface_name, type: string }
+      - { name: payload, type: object }
+      - { name: routing_policy, type: object }
+      - { name: action_result, type: string }
+      - { name: success, type: boolean }
+
+  - name: MemoryEntry
+    description: "Memory entry for vector store"
+    fields:
+      - { name: text, type: string }
+      - { name: embedding, type: "list<float>" }
+      - { name: metadata, type: object }
+
+  - name: WorkspaceEntry
+    description: "Workspace key-value entry"
+    fields:
+      - { name: key, type: string }
+      - { name: value, type: string }

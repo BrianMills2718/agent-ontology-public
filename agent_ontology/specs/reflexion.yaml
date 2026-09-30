@@ -1,0 +1,429 @@
+# ===================================================================
+# Reflexion Agent -- Agent Spec (Agent Ontology v0.2)
+# ===================================================================
+# Implements the Reflexion pattern from Shinn et al. 2023
+# (https://arxiv.org/abs/2303.11366).
+#
+# The agent attempts a task, evaluates its result against success
+# criteria, generates verbal self-reflection on failure, and retries
+# with the accumulated reflections as episodic memory context.
+# This tests: self-referential loops, store writes for episodic
+# memory, multi-round refinement with memory, and error_handler
+# process type for handling failures.
+
+name: "Reflexion"
+version: "1.0"
+description: "Reflexion agent that attempts tasks, self-evaluates, generates verbal reflections on failure, and retries with accumulated episodic memory until success or max trials."
+entry_point: receive_task
+
+# -- Entities -------------------------------------------------------
+
+entities:
+
+  - id: actor_agent
+    type: agent
+    label: "Actor Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an Actor agent. You receive a task and a list of prior self-reflections
+      from previous failed attempts. Use those reflections to avoid repeating mistakes.
+      Produce an action trajectory: a sequence of reasoning steps and a final answer.
+      Output JSON with "trajectory" (list of step strings) and "answer" (string).
+    input_schema: ActorInput
+    output_schema: ActorOutput
+
+  - id: evaluator_agent
+    type: agent
+    label: "Evaluator Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an Evaluator. Given a task description, the expected outcome criteria,
+      and the actor's answer, determine whether the attempt succeeded.
+      Output JSON with "success" (boolean), "score" (float 0-1),
+      and "failure_reason" (string, empty if success).
+    input_schema: EvaluatorInput
+    output_schema: EvaluatorOutput
+
+  - id: self_reflection_agent
+    type: agent
+    label: "Self-Reflection Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a Self-Reflection agent. Given a failed attempt's trajectory, the task,
+      the evaluator's failure reason, and all prior reflections, generate a concise
+      verbal self-reflection. Identify what went wrong, why, and what strategy the
+      actor should use next time. Be specific and actionable.
+      Output JSON with "reflection" (string) and "suggested_strategy" (string).
+    input_schema: ReflectionInput
+    output_schema: ReflectionOutput
+
+  - id: episodic_memory
+    type: store
+    label: "Episodic Memory"
+    store_type: queue
+    schema: EpisodeEntry
+    retention: session
+
+  - id: user
+    type: human
+    label: "User"
+
+# -- Processes ------------------------------------------------------
+
+processes:
+
+  - id: receive_task
+    type: step
+    label: "Receive Task"
+    description: "Accept the task and success criteria, initialize trial state"
+    data_out: TaskSpec
+    logic: |
+      state.data["trial"] = 0
+      state.data["max_trials"] = 5
+      state.data["reflections"] = []
+      state.data["episodes"] = []
+      state.data["succeeded"] = False
+      print(f"    Task: {state.data.get('task', '')[:100]}")
+      print(f"    Max trials: {state.data['max_trials']}")
+
+  - id: attempt_task
+    type: step
+    label: "Attempt Task"
+    description: "Invoke the actor agent with the task and accumulated reflections"
+    data_in: ActorInput
+    data_out: ActorOutput
+    logic: |
+      trial = state.data.get("trial", 0) + 1
+      state.data["trial"] = trial
+      reflections = state.data.get("reflections", [])
+      print(f"    Trial {trial}/{state.data.get('max_trials', 5)} with {len(reflections)} prior reflections")
+
+  - id: evaluate_attempt
+    type: step
+    label: "Evaluate Attempt"
+    description: "Invoke the evaluator agent to judge whether the attempt succeeded"
+    data_in: EvaluatorInput
+    data_out: EvaluatorOutput
+    logic: |
+      answer = state.data.get("answer", "")
+      print(f"    Evaluating answer ({len(answer)} chars)...")
+
+  - id: check_success
+    type: gate
+    label: "Succeeded?"
+    condition: "success == True"
+    branches:
+      - condition: "success is True"
+        target: finalize_success
+      - condition: "success is False"
+        target: check_trials_remaining
+
+  - id: check_trials_remaining
+    type: gate
+    label: "Trials remaining?"
+    condition: "trial < max_trials"
+    branches:
+      - condition: "trials remaining"
+        target: generate_reflection
+      - condition: "trials exhausted"
+        target: finalize_failure
+
+  - id: generate_reflection
+    type: step
+    label: "Generate Self-Reflection"
+    description: "Invoke the self-reflection agent to produce verbal reflection on the failure"
+    data_in: ReflectionInput
+    data_out: ReflectionOutput
+    logic: |
+      trial = state.data.get("trial", 0)
+      reason = state.data.get("failure_reason", "unknown")
+      print(f"    Reflecting on trial {trial} failure: {reason[:80]}")
+
+  - id: store_reflection
+    type: step
+    label: "Store Reflection"
+    description: "Append the reflection to episodic memory and prepare for retry"
+    logic: |
+      reflection = state.data.get("reflection", "")
+      strategy = state.data.get("suggested_strategy", "")
+      trial = state.data.get("trial", 0)
+      # Accumulate reflections
+      reflections = state.data.get("reflections", [])
+      reflections.append(reflection)
+      state.data["reflections"] = reflections
+      # Build episode entry
+      episode = {
+          "trial_number": trial,
+          "answer": state.data.get("answer", ""),
+          "score": state.data.get("score", 0.0),
+          "failure_reason": state.data.get("failure_reason", ""),
+          "reflection": reflection,
+          "suggested_strategy": strategy,
+      }
+      episodes = state.data.get("episodes", [])
+      episodes.append(episode)
+      state.data["episodes"] = episodes
+      print(f"    Stored reflection #{len(reflections)}: {reflection[:80]}")
+
+  - id: actor_error_handler
+    type: error_handler
+    label: "Actor Error Handler"
+    scope:
+      - attempt_task
+    on_error: handle_actor_error
+    retry:
+      max_retries: 2
+      backoff: exponential
+      initial_delay_ms: 1000
+      max_delay_ms: 10000
+      retryable_errors:
+        - rate_limit
+        - timeout
+        - 5xx
+    fallback: generate_reflection
+    error_schema: ErrorInfo
+
+  - id: handle_actor_error
+    type: step
+    label: "Handle Actor Error"
+    description: "Process errors from the actor agent invocation"
+    logic: |
+      error = state.data.get("error_message", "Unknown error")
+      state.data["failure_reason"] = f"Actor execution error: {error}"
+      state.data["success"] = False
+      state.data["score"] = 0.0
+      state.data["answer"] = ""
+      state.data["trajectory"] = []
+      print(f"    Actor error caught: {error[:100]}")
+
+  - id: finalize_success
+    type: step
+    label: "Finalize (Success)"
+    description: "Return the successful answer with trial metadata"
+    data_out: ReflexionResult
+    logic: |
+      trial = state.data.get("trial", 0)
+      score = state.data.get("score", 0.0)
+      print(f"    Success on trial {trial} with score {score}")
+      state.data["final_answer"] = state.data.get("answer", "")
+      state.data["total_trials"] = trial
+      state.data["final_score"] = score
+      state.data["outcome"] = "success"
+      state.data["_done"] = True
+
+  - id: finalize_failure
+    type: step
+    label: "Finalize (Failure)"
+    description: "Return the best attempt after exhausting all trials"
+    data_out: ReflexionResult
+    logic: |
+      trial = state.data.get("trial", 0)
+      score = state.data.get("score", 0.0)
+      reflections = state.data.get("reflections", [])
+      print(f"    All {trial} trials exhausted. Best score: {score}")
+      print(f"    Total reflections generated: {len(reflections)}")
+      state.data["final_answer"] = state.data.get("answer", "")
+      state.data["total_trials"] = trial
+      state.data["final_score"] = score
+      state.data["outcome"] = "failure_max_trials"
+      state.data["_done"] = True
+
+# -- Edges ----------------------------------------------------------
+
+edges:
+
+  # Entry
+  - type: flow
+    from: user
+    to: receive_task
+    label: "Submit task"
+    data: TaskSpec
+
+  - type: flow
+    from: receive_task
+    to: attempt_task
+    label: "Start first trial"
+
+  # Actor invocation
+  - type: invoke
+    from: attempt_task
+    to: actor_agent
+    label: "Execute task attempt"
+    input: ActorInput
+    output: ActorOutput
+
+  - type: flow
+    from: attempt_task
+    to: evaluate_attempt
+    label: "Evaluate result"
+
+  # Evaluator invocation
+  - type: invoke
+    from: evaluate_attempt
+    to: evaluator_agent
+    label: "Judge attempt"
+    input: EvaluatorInput
+    output: EvaluatorOutput
+
+  - type: flow
+    from: evaluate_attempt
+    to: check_success
+    label: "Check outcome"
+
+  # Success gate branches
+  - type: branch
+    from: check_success
+    to: finalize_success
+    condition: "success == True"
+
+  - type: branch
+    from: check_success
+    to: check_trials_remaining
+    condition: "success == False"
+
+  # Trials gate branches
+  - type: branch
+    from: check_trials_remaining
+    to: generate_reflection
+    condition: "trial < max_trials"
+
+  - type: branch
+    from: check_trials_remaining
+    to: finalize_failure
+    condition: "trial >= max_trials"
+
+  # Reflection invocation
+  - type: invoke
+    from: generate_reflection
+    to: self_reflection_agent
+    label: "Generate self-reflection"
+    input: ReflectionInput
+    output: ReflectionOutput
+
+  - type: flow
+    from: generate_reflection
+    to: store_reflection
+    label: "Store in episodic memory"
+
+  # Write episode to store
+  - type: write
+    from: store_reflection
+    to: episodic_memory
+    label: "Persist episode"
+    data: EpisodeEntry
+
+  # Retry loop
+  - type: flow
+    from: store_reflection
+    to: attempt_task
+    label: "Retry with reflection"
+
+  - type: loop
+    from: store_reflection
+    to: attempt_task
+    label: "Reflexion retry loop"
+    condition: "trial < max_trials"
+
+  # Error handler edges
+  - type: observe
+    from: actor_error_handler
+    to: attempt_task
+    label: "Monitors actor execution"
+
+  - type: flow
+    from: actor_error_handler
+    to: handle_actor_error
+    label: "On error"
+
+  - type: flow
+    from: handle_actor_error
+    to: check_trials_remaining
+    label: "Route error to trial check"
+
+  # Read from episodic memory for context
+  - type: read
+    from: attempt_task
+    to: episodic_memory
+    label: "Read prior episodes"
+
+# -- Schemas --------------------------------------------------------
+
+schemas:
+
+  - name: TaskSpec
+    description: "The task to attempt with success criteria"
+    fields:
+      - { name: task, type: string }
+      - { name: success_criteria, type: string }
+
+  - name: ActorInput
+    description: "Input to the actor agent"
+    fields:
+      - { name: task, type: string }
+      - { name: success_criteria, type: string }
+      - { name: reflections, type: "list<string>" }
+      - { name: trial, type: integer }
+
+  - name: ActorOutput
+    description: "Output from the actor agent"
+    fields:
+      - { name: trajectory, type: "list<string>" }
+      - { name: answer, type: string }
+
+  - name: EvaluatorInput
+    description: "Input to the evaluator agent"
+    fields:
+      - { name: task, type: string }
+      - { name: success_criteria, type: string }
+      - { name: answer, type: string }
+      - { name: trajectory, type: "list<string>" }
+
+  - name: EvaluatorOutput
+    description: "Output from the evaluator agent"
+    fields:
+      - { name: success, type: boolean }
+      - { name: score, type: float }
+      - { name: failure_reason, type: string }
+
+  - name: ReflectionInput
+    description: "Input to the self-reflection agent"
+    fields:
+      - { name: task, type: string }
+      - { name: trajectory, type: "list<string>" }
+      - { name: answer, type: string }
+      - { name: failure_reason, type: string }
+      - { name: prior_reflections, type: "list<string>" }
+      - { name: trial, type: integer }
+
+  - name: ReflectionOutput
+    description: "Output from the self-reflection agent"
+    fields:
+      - { name: reflection, type: string }
+      - { name: suggested_strategy, type: string }
+
+  - name: EpisodeEntry
+    description: "A single trial episode stored in episodic memory"
+    fields:
+      - { name: trial_number, type: integer }
+      - { name: answer, type: string }
+      - { name: score, type: float }
+      - { name: failure_reason, type: string }
+      - { name: reflection, type: string }
+      - { name: suggested_strategy, type: string }
+
+  - name: ErrorInfo
+    description: "Error information passed to the error handler"
+    fields:
+      - { name: error_type, type: string }
+      - { name: error_message, type: string }
+      - { name: retry_count, type: integer }
+
+  - name: ReflexionResult
+    description: "Final result of the Reflexion process"
+    fields:
+      - { name: final_answer, type: string }
+      - { name: total_trials, type: integer }
+      - { name: final_score, type: float }
+      - { name: outcome, type: "enum[success, failure_max_trials]" }
+      - { name: reflections, type: "list<string>" }
+      - { name: episodes, type: "list<EpisodeEntry>" }

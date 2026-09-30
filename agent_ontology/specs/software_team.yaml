@@ -1,0 +1,233 @@
+# ═══════════════════════════════════════════════════════════════
+# Software Team — MetaGPT-style pub/sub multi-agent
+# ═══════════════════════════════════════════════════════════════
+# Demonstrates: channel entity, publish/subscribe edges, team entity,
+#               spec-level state schema
+#
+# A software development team where agents communicate via typed
+# message channels rather than direct wiring. The Product Manager
+# publishes a PRD, the Architect subscribes and publishes a Design,
+# the Engineer subscribes to the Design and publishes Code.
+#
+# Pattern: Shared message pool / pub-sub (MetaGPT)
+# ═══════════════════════════════════════════════════════════════
+
+name: "Software Development Team"
+version: "1.0"
+description: "Multi-agent software team with pub/sub communication channels"
+entry_point: receive_task
+
+# ── Typed state schema (new in v0.2) ──
+state:
+  schema: ProjectState
+  channels:
+    - { name: requirements, type: "list<PRD>", reducer: append }
+    - { name: designs, type: "list<DesignDoc>", reducer: append }
+    - { name: code_artifacts, type: "list<CodeModule>", reducer: append }
+    - { name: reviews, type: "list<ReviewResult>", reducer: append }
+  initial:
+    requirements: []
+    designs: []
+    code_artifacts: []
+    reviews: []
+
+entities:
+  # ── Agents ──
+  - id: product_manager
+    type: agent
+    label: "Product Manager"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a Product Manager. Given a project description, produce a
+      structured Product Requirements Document (PRD) with user stories,
+      acceptance criteria, and priority ranking.
+    output_schema: PRD
+
+  - id: architect
+    type: agent
+    label: "Software Architect"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a Software Architect. Given a PRD, design the system
+      architecture: component diagram, API contracts, data models,
+      and technology choices.
+    output_schema: DesignDoc
+
+  - id: engineer
+    type: agent
+    label: "Engineer"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a Software Engineer. Given an architecture design,
+      implement the code modules. Write clean, well-tested code
+      that satisfies the design specification.
+    output_schema: CodeModule
+
+  - id: qa_agent
+    type: agent
+    label: "QA Engineer"
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a QA Engineer. Review the code against the PRD and
+      design. Check for bugs, missing requirements, and code quality.
+      Provide a pass/fail verdict with detailed feedback.
+    output_schema: ReviewResult
+
+  # ── Team ──
+  - id: dev_team
+    type: team
+    label: "Development Team"
+    members: [product_manager, architect, engineer, qa_agent]
+    strategy: sequential
+
+  # ── Channels ──
+  - id: requirements_channel
+    type: channel
+    label: "Requirements Channel"
+    channel_type: topic
+    message_schema: PRD
+    retention: all
+
+  - id: design_channel
+    type: channel
+    label: "Design Channel"
+    channel_type: topic
+    message_schema: DesignDoc
+    retention: all
+
+  - id: code_channel
+    type: channel
+    label: "Code Channel"
+    channel_type: topic
+    message_schema: CodeModule
+    retention: all
+
+  - id: review_channel
+    type: channel
+    label: "Review Channel"
+    channel_type: topic
+    message_schema: ReviewResult
+    retention: all
+
+processes:
+  - id: receive_task
+    type: step
+    label: "Receive Project Task"
+    logic: |
+      state.data["project_description"] = state.data.get("query", "")
+
+  - id: create_prd
+    type: step
+    label: "Create PRD"
+    logic: |
+      pass
+
+  - id: design_system
+    type: step
+    label: "Design System"
+    logic: |
+      pass
+
+  - id: implement_code
+    type: step
+    label: "Implement Code"
+    logic: |
+      state.data["revision_count"] = state.data.get("revision_count", 0) + 1
+
+  - id: review_code
+    type: step
+    label: "Review Code"
+    logic: |
+      pass
+
+  - id: check_quality
+    type: gate
+    label: "Quality Check"
+    condition: "verdict == pass"
+    branches:
+      - condition: "verdict == pass"
+        target: deliver
+      - condition: "revision_count >= max_iterations"
+        target: deliver
+      - condition: "verdict == fail"
+        target: implement_code
+    default: deliver
+
+  - id: deliver
+    type: step
+    label: "Deliver"
+    logic: |
+      state.data["_done"] = True
+      cm = state.data.get("code_module", {})
+      state.data["final_output"] = cm.get("code", "") if isinstance(cm, dict) else str(cm)
+
+edges:
+  # ── Flow spine ──
+  - { type: flow, from: receive_task, to: create_prd }
+  - { type: flow, from: create_prd, to: design_system }
+  - { type: flow, from: design_system, to: implement_code }
+  - { type: flow, from: implement_code, to: review_code }
+  - { type: flow, from: review_code, to: check_quality }
+  - { type: flow, from: deliver, to: deliver }  # terminal
+
+  # ── Branch edges ──
+  - { type: branch, from: check_quality, to: deliver, condition: "verdict == pass" }
+  - { type: branch, from: check_quality, to: implement_code, condition: "verdict == fail" }
+
+  # ── Loop (revision cycle) ──
+  - { type: loop, from: check_quality, to: implement_code, condition: "verdict == fail" }
+
+  # ── Invoke agents ──
+  - { type: invoke, from: create_prd, to: product_manager, output: PRD }
+  - { type: invoke, from: design_system, to: architect, output: DesignDoc }
+  - { type: invoke, from: implement_code, to: engineer, output: CodeModule }
+  - { type: invoke, from: review_code, to: qa_agent, output: ReviewResult }
+
+  # ── Publish to channels ──
+  - { type: publish, from: create_prd, to: requirements_channel, label: "Publish PRD", data: PRD }
+  - { type: publish, from: design_system, to: design_channel, label: "Publish design", data: DesignDoc }
+  - { type: publish, from: implement_code, to: code_channel, label: "Publish code", data: CodeModule }
+  - { type: publish, from: review_code, to: review_channel, label: "Publish review", data: ReviewResult }
+
+  # ── Subscribe from channels ──
+  - { type: subscribe, from: requirements_channel, to: design_system, label: "Read PRD", activates: true }
+  - { type: subscribe, from: design_channel, to: implement_code, label: "Read design", activates: true }
+  - { type: subscribe, from: code_channel, to: review_code, label: "Read code", activates: true }
+  - { type: subscribe, from: requirements_channel, to: review_code, label: "Read PRD for QA", activates: false }
+
+schemas:
+  - name: ProjectState
+    fields:
+      - { name: project_description, type: string }
+      - { name: requirements, type: "list<PRD>" }
+      - { name: designs, type: "list<DesignDoc>" }
+      - { name: code_artifacts, type: "list<CodeModule>" }
+      - { name: reviews, type: "list<ReviewResult>" }
+
+  - name: PRD
+    fields:
+      - { name: title, type: string }
+      - { name: user_stories, type: "list<string>" }
+      - { name: acceptance_criteria, type: "list<string>" }
+      - { name: priority, type: string }
+
+  - name: DesignDoc
+    fields:
+      - { name: components, type: "list<string>" }
+      - { name: api_contracts, type: string }
+      - { name: data_models, type: string }
+      - { name: tech_stack, type: "list<string>" }
+
+  - name: CodeModule
+    fields:
+      - { name: filename, type: string }
+      - { name: code, type: string }
+      - { name: language, type: string }
+      - { name: tests, type: string }
+
+  - name: ReviewResult
+    fields:
+      - { name: verdict, type: string, description: "pass or fail" }
+      - { name: issues, type: "list<string>" }
+      - { name: suggestions, type: "list<string>" }
+      - { name: quality_score, type: integer }

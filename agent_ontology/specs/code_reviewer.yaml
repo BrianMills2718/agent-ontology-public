@@ -1,0 +1,339 @@
+name: "Code Review Agent"
+version: "1.0"
+description: "Automated code review agent that analyzes pull requests with specialized reviewers and synthesizes a final review, looping until quality is satisfactory."
+entry_point: intake_pr
+
+entities:
+  - id: intake_agent
+    type: agent
+    label: "Intake Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You receive pull request metadata including diff, files changed, and PR description. Store the PR metadata for downstream analysis.
+    input_schema: PRInput
+    output_schema: PRMetadata
+
+  - id: security_reviewer
+    type: agent
+    label: "Security Reviewer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You analyze the full pull request diff for security vulnerabilities such as SQL injection, XSS, hardcoded secrets, and other risks. Provide a structured review of security issues.
+    input_schema: PRMetadata
+    output_schema: SecurityReview
+
+  - id: style_reviewer
+    type: agent
+    label: "Style Reviewer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You analyze the full pull request diff for code style issues including naming conventions, formatting consistency, and style guide adherence. Provide a structured style review.
+    input_schema: PRMetadata
+    output_schema: StyleReview
+
+  - id: logic_reviewer
+    type: agent
+    label: "Logic Reviewer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You analyze the full pull request diff for logical errors, edge cases, and performance issues. Provide a structured logic review.
+    input_schema: PRMetadata
+    output_schema: LogicReview
+
+  - id: lead_reviewer
+    type: agent
+    label: "Lead Reviewer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You synthesize the security, style, and logic reviews into a single structured review. Provide an overall quality score (1-10), a list of issues with severity (critical/warning/info), file, line, and description, and a summary recommendation (approve, request changes, or comment).
+    input_schema: SynthesizerInput
+    output_schema: SynthesizedReview
+
+  - id: pr_store
+    type: store
+    label: "PR Metadata and Review Store"
+    store_type: kv
+    schema: PRStoreData
+    retention: persistent
+
+  - id: human_reviewer
+    type: human
+    label: "Human Reviewer"
+    role: user
+
+processes:
+  - id: intake_pr
+    type: step
+    label: "Intake Pull Request"
+    description: "Receive PR metadata and store it"
+    data_in: PRInput
+    data_out: PRMetadata
+    logic: |
+      # Store the PR metadata in state.data for downstream use
+      state.data["pr_metadata"] = state.data.get("pr_metadata", {})
+      # Assume input contains pr_diff, pr_files, pr_description
+      # Store as is for reviewers
+      state.data["pr_metadata"]["diff"] = state.data.get("diff", "")
+      state.data["pr_metadata"]["files"] = state.data.get("files", [])
+      state.data["pr_metadata"]["description"] = state.data.get("description", "")
+      # Save to store will be done in write edge
+
+  - id: analyze_security
+    type: step
+    label: "Analyze Security"
+    description: "Prepare and send PR metadata to Security Reviewer"
+    data_in: PRMetadata
+    data_out: SecurityReview
+    logic: |
+      # Pass full PR metadata to security reviewer
+      state.data["security_input"] = state.data.get("pr_metadata", {})
+
+  - id: analyze_style
+    type: step
+    label: "Analyze Style"
+    description: "Prepare and send PR metadata to Style Reviewer"
+    data_in: PRMetadata
+    data_out: StyleReview
+    logic: |
+      # Pass full PR metadata to style reviewer
+      state.data["style_input"] = state.data.get("pr_metadata", {})
+
+  - id: analyze_logic
+    type: step
+    label: "Analyze Logic"
+    description: "Prepare and send PR metadata to Logic Reviewer"
+    data_in: PRMetadata
+    data_out: LogicReview
+    logic: |
+      # Pass full PR metadata to logic reviewer
+      state.data["logic_input"] = state.data.get("pr_metadata", {})
+
+  - id: synthesize_review
+    type: step
+    label: "Synthesize Review"
+    description: "Combine all three reviews into a single structured review"
+    data_in: SynthesizerInput
+    data_out: SynthesizedReview
+    logic: |
+      # Combine security, style, and logic reviews into one input for lead reviewer
+      state.data["synth_input"] = {
+        "security_review": state.data.get("security_review", {}),
+        "style_review": state.data.get("style_review", {}),
+        "logic_review": state.data.get("logic_review", {})
+      }
+
+  - id: post_review
+    type: step
+    label: "Post Review"
+    description: "Post synthesized review as PR comment and update store"
+    data_in: SynthesizedReview
+    logic: |
+      # Here would be logic to post comment to PR (external)
+      # Update review history in store
+      state.data["review_to_post"] = state.data.get("synthesized_review", {})
+
+  - id: check_quality
+    type: gate
+    label: "Is Quality Score >= 7?"
+    condition: "quality_score >= 7"
+    branches:
+      - condition: "yes"
+        target: end_process
+      - condition: "no"
+        target: request_fixes
+    logic: |
+      state.data["review_cycles"] = state.data.get("review_cycles", 0) + 1
+      if state.data["review_cycles"] >= 3:
+        state.data["quality_score"] = 10
+
+  - id: request_fixes
+    type: checkpoint
+    label: "Request Fixes from User"
+    prompt: "The review quality score is below 7. Please address the issues and push new commits."
+    options: ["fixes pushed"]
+    timeout: 86400
+    default_action: "skip"
+
+  - id: wait_for_new_commits
+    type: checkpoint
+    label: "Wait for New Commits"
+    prompt: "Waiting for new commits to be pushed after requested fixes."
+    options: ["new commits pushed"]
+    timeout: 86400
+    default_action: "skip"
+
+  - id: end_process
+    type: step
+    label: "End Process"
+    description: "Review process complete with satisfactory quality score"
+    logic: |
+      state.data["_done"] = True
+
+edges:
+  # Intake flow
+  - type: flow
+    from: intake_pr
+    to: analyze_security
+    label: "Start analysis"
+
+  - type: flow
+    from: intake_pr
+    to: analyze_style
+    label: "Start analysis"
+
+  - type: flow
+    from: intake_pr
+    to: analyze_logic
+    label: "Start analysis"
+
+  # Invoke reviewers
+  - type: invoke
+    from: analyze_security
+    to: security_reviewer
+    label: "Invoke Security Reviewer"
+    input: PRMetadata
+    output: SecurityReview
+
+  - type: invoke
+    from: analyze_style
+    to: style_reviewer
+    label: "Invoke Style Reviewer"
+    input: PRMetadata
+    output: StyleReview
+
+  - type: invoke
+    from: analyze_logic
+    to: logic_reviewer
+    label: "Invoke Logic Reviewer"
+    input: PRMetadata
+    output: LogicReview
+
+  # Flow from reviewers to synthesis
+  - type: flow
+    from: analyze_security
+    to: synthesize_review
+    label: "Security review ready"
+
+  - type: flow
+    from: analyze_style
+    to: synthesize_review
+    label: "Style review ready"
+
+  - type: flow
+    from: analyze_logic
+    to: synthesize_review
+    label: "Logic review ready"
+
+  # Invoke lead reviewer
+  - type: invoke
+    from: synthesize_review
+    to: lead_reviewer
+    label: "Invoke Lead Reviewer"
+    input: SynthesizerInput
+    output: SynthesizedReview
+
+  # Post review and write to store
+  - type: flow
+    from: synthesize_review
+    to: post_review
+    label: "Post synthesized review"
+
+  - type: write
+    from: intake_pr
+    to: pr_store
+    label: "Store PR metadata"
+    data: PRMetadata
+
+  - type: write
+    from: post_review
+    to: pr_store
+    label: "Store review history"
+    data: SynthesizedReview
+
+  # Quality check and loop
+  - type: flow
+    from: post_review
+    to: check_quality
+    label: "Check quality score"
+
+  - type: branch
+    from: check_quality
+    to: end_process
+    condition: "quality_score >= 7"
+
+  - type: branch
+    from: check_quality
+    to: request_fixes
+    condition: "quality_score < 7"
+
+  - type: flow
+    from: request_fixes
+    to: wait_for_new_commits
+    label: "Wait for fixes"
+
+  - type: flow
+    from: wait_for_new_commits
+    to: intake_pr
+    label: "Re-review after new commits"
+
+schemas:
+  - name: PRInput
+    description: "Input data for a pull request"
+    fields:
+      - { name: diff, type: string }
+      - { name: files, type: "list<string>" }
+      - { name: description, type: string }
+
+  - name: PRMetadata
+    description: "Stored pull request metadata"
+    fields:
+      - { name: diff, type: string }
+      - { name: files, type: "list<string>" }
+      - { name: description, type: string }
+
+  - name: SecurityReview
+    description: "Structured security review output"
+    fields:
+      - { name: issues, type: "list<Issue>" }
+      - { name: summary, type: string }
+
+  - name: StyleReview
+    description: "Structured style review output"
+    fields:
+      - { name: issues, type: "list<Issue>" }
+      - { name: summary, type: string }
+
+  - name: LogicReview
+    description: "Structured logic review output"
+    fields:
+      - { name: issues, type: "list<Issue>" }
+      - { name: summary, type: string }
+
+  - name: Issue
+    description: "A single review issue"
+    fields:
+      - { name: severity, type: "enum[critical, warning, info]" }
+      - { name: file, type: string }
+      - { name: line, type: integer }
+      - { name: description, type: string }
+
+  - name: SynthesizerInput
+    description: "Input to the lead reviewer synthesizer"
+    fields:
+      - { name: security_review, type: SecurityReview }
+      - { name: style_review, type: StyleReview }
+      - { name: logic_review, type: LogicReview }
+
+  - name: SynthesizedReview
+    description: "Final synthesized review output"
+    fields:
+      - { name: quality_score, type: integer }
+      - { name: issues, type: "list<Issue>" }
+      - { name: recommendation, type: "enum[approve, request changes, comment]" }
+      - { name: summary, type: string }
+
+  - name: PRStoreData
+    description: "Data stored in the PR key-value store"
+    fields:
+      - { name: pr_metadata, type: PRMetadata }
+      - { name: review_history, type: "list<SynthesizedReview>" }

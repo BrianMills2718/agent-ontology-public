@@ -1,0 +1,8 @@
+# Development/research dependencies
+-r requirements.txt
+
+# OWL/DL ontology experiments
+owlready2>=0.40
+
+# RDF/SPARQL experiments
+rdflib>=7.0

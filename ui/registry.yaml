@@ -1,0 +1,20 @@
+schema_version: ui-registry/v1
+project_id: agent_ontology
+ui_status: active
+surfaces:
+  - id: spec-viewer-v2
+    lifecycle: candidate
+    source_path: agent_ontology/v2/spec-viewer-v2.html
+    purpose: Standalone spec viewer, v2.
+    provenance:
+      last_touched: "2026-02-24"
+    caveat: >-
+      Committed the same minute as the v1 viewer below -- looks like an
+      intentional versioned pair rather than accidental drift, but not
+      confirmed which one is meant to be used going forward.
+  - id: spec-viewer-v1
+    lifecycle: candidate
+    source_path: spec-viewer.html
+    purpose: Standalone spec viewer, v1 (root-level, pre-v2 naming).
+    provenance:
+      last_touched: "2026-02-24"

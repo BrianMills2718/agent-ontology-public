@@ -1,0 +1,284 @@
+# ═══════════════════════════════════════════════════════════════
+# Tree-of-Thought Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Implements the Tree-of-Thought reasoning pattern.
+# Given a problem, generates K candidate thoughts at each level,
+# evaluates and prunes to top-N, then expands deeper for D levels.
+# Selects the best-scoring leaf as the final answer.
+
+name: "Tree of Thought"
+version: "1.0"
+description: "Tree-of-Thought agent that explores multiple reasoning paths, evaluates them, prunes weak branches, and selects the best leaf as the final answer."
+entry_point: receive_problem
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: thought_generator
+    type: agent
+    label: "Thought Generator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a creative reasoning agent. Given a problem and a parent thought (or the root problem),
+      generate exactly K candidate next-step thoughts. Each thought should be a distinct reasoning path
+      that advances toward solving the problem. Output them as a JSON array of objects, each with
+      "thought_id" (string) and "content" (string describing the reasoning step).
+    input_schema: GeneratorInput
+    output_schema: GeneratedThoughts
+
+  - id: thought_evaluator
+    type: agent
+    label: "Thought Evaluator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a critical evaluator of reasoning steps. Given a problem and a candidate thought,
+      score how promising this thought is on a scale of 1-10 (10 = highly promising, likely leads
+      to correct solution; 1 = dead end or incorrect reasoning). Also provide a brief rationale.
+      Output JSON with "score" (integer 1-10) and "rationale" (string).
+    input_schema: EvaluatorInput
+    output_schema: EvaluationResult
+
+  - id: thought_store
+    type: store
+    label: "Thought Store"
+    store_type: queue
+    schema: ThoughtNode
+    retention: session
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_problem
+    type: step
+    label: "Receive Problem"
+    description: "Accept the problem input and initialize the tree-of-thought state"
+    data_out: ProblemInput
+    logic: |
+      state.data["current_depth"] = 0
+      state.data["max_depth"] = state.data.get("max_depth", 3)
+      state.data["k_candidates"] = state.data.get("k_candidates", 3)
+      state.data["top_n"] = state.data.get("top_n", 2)
+      state.data["all_thoughts"] = []
+      # Initialize with root node representing the problem itself
+      root = {
+          "thought_id": "root",
+          "content": state.data.get("problem", ""),
+          "depth": 0,
+          "score": 0,
+          "parent_id": None
+      }
+      state.data["current_parents"] = [root]
+      state.data["all_thoughts"].append(root)
+      print(f"    Problem: {state.data.get('problem', '')[:100]}")
+      print(f"    Config: depth={state.data['max_depth']}, K={state.data['k_candidates']}, top-N={state.data['top_n']}")
+
+  - id: check_depth
+    type: gate
+    label: "Depth limit reached?"
+    condition: "current_depth >= max_depth"
+    branches:
+      - condition: "depth < max_depth"
+        target: generate_thoughts
+      - condition: "depth >= max_depth"
+        target: select_best
+
+  - id: generate_thoughts
+    type: step
+    label: "Generate Thoughts"
+    description: "For each current parent thought, invoke the generator to produce K candidate children"
+    data_in: GeneratorInput
+    data_out: GeneratedThoughts
+    logic: |
+      state.data["current_depth"] = state.data.get("current_depth", 0) + 1
+      parents = state.data.get("current_parents", [])
+      state.data["parent_index"] = 0
+      state.data["generated_children"] = []
+      print(f"    Generating thoughts at depth {state.data['current_depth']} for {len(parents)} parent(s)")
+
+  - id: evaluate_thoughts
+    type: step
+    label: "Evaluate Thoughts"
+    description: "Invoke the evaluator agent to score each generated thought"
+    data_in: EvaluatorInput
+    data_out: EvaluationResult
+    logic: |
+      children = state.data.get("generated_children", [])
+      state.data["eval_index"] = 0
+      print(f"    Evaluating {len(children)} candidate thoughts")
+
+  - id: expand_thoughts
+    type: step
+    label: "Expand Thoughts"
+    description: "Prune to top-N thoughts by score and set them as parents for the next depth level"
+    logic: |
+      children = state.data.get("generated_children", [])
+      top_n = state.data.get("top_n", 2)
+      # Sort by score descending and keep top N
+      sorted_children = sorted(children, key=lambda t: t.get("score", 0), reverse=True)
+      selected = sorted_children[:top_n]
+      state.data["current_parents"] = selected
+      # Add to all_thoughts
+      all_thoughts = state.data.get("all_thoughts", [])
+      all_thoughts.extend(selected)
+      state.data["all_thoughts"] = all_thoughts
+      print(f"    Selected top-{top_n} thoughts (scores: {[t.get('score', 0) for t in selected]})")
+
+  - id: select_best
+    type: step
+    label: "Select Best"
+    description: "Among all leaf-level thoughts, select the one with the highest score"
+    logic: |
+      max_depth = state.data.get("current_depth", state.data.get("max_depth", 3))
+      all_thoughts = state.data.get("all_thoughts", [])
+      leaves = [t for t in all_thoughts if t.get("depth", 0) == max_depth]
+      if not leaves:
+          leaves = state.data.get("current_parents", [])
+      best = max(leaves, key=lambda t: t.get("score", 0)) if leaves else {"content": "No solution found", "score": 0}
+      state.data["best_thought"] = best
+      print(f"    Best thought (score={best.get('score', 0)}): {best.get('content', '')[:100]}")
+
+  - id: produce_answer
+    type: step
+    label: "Produce Answer"
+    description: "Format the best thought into the final answer output"
+    data_out: FinalAnswer
+    logic: |
+      best = state.data.get("best_thought", {})
+      state.data["answer"] = best.get("content", "No answer found")
+      state.data["answer_score"] = best.get("score", 0)
+      state.data["total_thoughts_explored"] = len(state.data.get("all_thoughts", []))
+      print(f"    Final answer (score={state.data['answer_score']}): {state.data['answer'][:200]}")
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  # Entry flow
+  - type: flow
+    from: receive_problem
+    to: check_depth
+    label: "Check if depth limit reached"
+
+  # Gate branches
+  - type: branch
+    from: check_depth
+    to: generate_thoughts
+    condition: "depth < max_depth"
+
+  - type: branch
+    from: check_depth
+    to: select_best
+    condition: "depth >= max_depth"
+
+  # Generation -> Evaluation -> Expansion
+  - type: invoke
+    from: generate_thoughts
+    to: thought_generator
+    label: "Generate K candidate thoughts"
+    input: GeneratorInput
+    output: GeneratedThoughts
+
+  - type: flow
+    from: generate_thoughts
+    to: evaluate_thoughts
+    label: "Score candidates"
+
+  - type: invoke
+    from: evaluate_thoughts
+    to: thought_evaluator
+    label: "Evaluate each thought"
+    input: EvaluatorInput
+    output: EvaluationResult
+
+  - type: flow
+    from: evaluate_thoughts
+    to: expand_thoughts
+    label: "Prune to top-N"
+
+  # Store write
+  - type: write
+    from: expand_thoughts
+    to: thought_store
+    label: "Persist selected thoughts"
+    data: ThoughtNode
+
+  # Loop back to depth check
+  - type: flow
+    from: expand_thoughts
+    to: check_depth
+    label: "Check depth again"
+
+  - type: loop
+    from: expand_thoughts
+    to: check_depth
+    label: "Next depth level"
+    condition: "current_depth < max_depth"
+
+  # Final answer path
+  - type: flow
+    from: select_best
+    to: produce_answer
+    label: "Produce final answer"
+
+  # Store read for selecting best
+  - type: read
+    from: select_best
+    to: thought_store
+    label: "Read all thoughts"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: ProblemInput
+    description: "The problem to solve using tree-of-thought"
+    fields:
+      - { name: problem, type: string }
+      - { name: max_depth, type: integer }
+      - { name: k_candidates, type: integer }
+      - { name: top_n, type: integer }
+
+  - name: GeneratorInput
+    description: "Input to the thought generator agent"
+    fields:
+      - { name: problem, type: string }
+      - { name: parent_thought, type: string }
+      - { name: depth, type: integer }
+      - { name: k_candidates, type: integer }
+
+  - name: GeneratedThoughts
+    description: "Output from the thought generator"
+    fields:
+      - { name: thoughts, type: "list<ThoughtNode>" }
+
+  - name: EvaluatorInput
+    description: "Input to the thought evaluator agent"
+    fields:
+      - { name: problem, type: string }
+      - { name: thought_content, type: string }
+      - { name: depth, type: integer }
+
+  - name: EvaluationResult
+    description: "Evaluation score and rationale for a thought"
+    fields:
+      - { name: score, type: integer }
+      - { name: rationale, type: string }
+
+  - name: ThoughtNode
+    description: "A single node in the thought tree"
+    fields:
+      - { name: thought_id, type: string }
+      - { name: content, type: string }
+      - { name: depth, type: integer }
+      - { name: score, type: integer }
+      - { name: parent_id, type: string }
+
+  - name: FinalAnswer
+    description: "The final answer selected from the thought tree"
+    fields:
+      - { name: answer, type: string }
+      - { name: answer_score, type: integer }
+      - { name: total_thoughts_explored, type: integer }

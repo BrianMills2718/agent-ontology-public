@@ -1,0 +1,263 @@
+# ═══════════════════════════════════════════════════════════════
+# Self-Refine Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Implements the Self-Refine pattern.
+# A generator produces an initial output, a critic evaluates it
+# and provides feedback. If quality is below threshold, the
+# generator refines using the feedback. Repeats up to max rounds.
+
+name: "Self Refine"
+version: "1.0"
+description: "Self-Refine agent with a generator-critic loop: generates output, critiques it, and iteratively refines based on feedback until quality threshold is met or max rounds reached."
+entry_point: receive_task
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: generator
+    type: agent
+    label: "Generator Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a skilled content generator. When given a task, produce a high-quality output.
+      If you also receive feedback from a previous round, incorporate that feedback to improve
+      your output. Focus on addressing every piece of specific feedback provided.
+      Output JSON with "output_text" (string with your generated content) and
+      "changes_made" (string summarizing what you changed from the previous version, or "initial" if first attempt).
+    input_schema: GeneratorInput
+    output_schema: GeneratorOutput
+
+  - id: critic
+    type: agent
+    label: "Critic Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a demanding but fair critic. Given a task description and a generated output,
+      evaluate the quality of the output on a scale of 1-10 (10 = excellent, publication-ready;
+      7 = good enough; below 7 = needs improvement). Provide specific, actionable feedback
+      listing exactly what should be improved. Output JSON with "quality_score" (integer 1-10),
+      "strengths" (list of strings), "weaknesses" (list of strings), and
+      "specific_feedback" (string with detailed improvement instructions).
+    input_schema: CriticInput
+    output_schema: CriticOutput
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_task
+    type: step
+    label: "Receive Task"
+    description: "Accept the task input and initialize refinement state"
+    data_out: TaskInput
+    logic: |
+      state.data["refinement_round"] = 0
+      state.data["max_rounds"] = 3
+      state.data["quality_threshold"] = 7
+      state.data["feedback_history"] = []
+      state.data["current_output"] = ""
+      print(f"    Task: {state.data.get('task', '')[:100]}")
+      print(f"    Config: max_rounds={state.data['max_rounds']}, threshold={state.data['quality_threshold']}")
+
+  - id: generate
+    type: step
+    label: "Generate Output"
+    description: "Invoke the generator agent to produce or refine output"
+    data_in: GeneratorInput
+    data_out: GeneratorOutput
+    logic: |
+      round_num = state.data.get("refinement_round", 0)
+      if round_num == 0:
+          print(f"    Generating initial output...")
+      else:
+          print(f"    Refining output (round {round_num})...")
+          print(f"    Using feedback: {state.data.get('specific_feedback', '')[:80]}")
+
+  - id: critique
+    type: step
+    label: "Critique Output"
+    description: "Invoke the critic agent to evaluate the generated output"
+    data_in: CriticInput
+    data_out: CriticOutput
+    logic: |
+      current = state.data.get("current_output", "")
+      print(f"    Critiquing output ({len(current)} chars)...")
+
+  - id: check_quality
+    type: gate
+    label: "Quality >= threshold?"
+    condition: "quality_score >= quality_threshold"
+    branches:
+      - condition: "score >= 7"
+        target: finalize
+      - condition: "score < 7"
+        target: check_rounds
+
+  - id: check_rounds
+    type: gate
+    label: "Rounds remaining?"
+    condition: "refinement_round < max_rounds"
+    branches:
+      - condition: "rounds remaining"
+        target: refine
+      - condition: "max rounds reached"
+        target: finalize
+
+  - id: refine
+    type: step
+    label: "Refine"
+    description: "Prepare feedback for the generator and increment the round counter"
+    logic: |
+      state.data["refinement_round"] = state.data.get("refinement_round", 0) + 1
+      # Record feedback for history
+      feedback_entry = {
+          "round": state.data["refinement_round"],
+          "quality_score": state.data.get("quality_score", 0),
+          "specific_feedback": state.data.get("specific_feedback", ""),
+      }
+      history = state.data.get("feedback_history", [])
+      history.append(feedback_entry)
+      state.data["feedback_history"] = history
+      print(f"    Preparing refinement round {state.data['refinement_round']}/{state.data['max_rounds']}")
+
+  - id: finalize
+    type: step
+    label: "Finalize"
+    description: "Produce the final output with quality metadata"
+    data_out: FinalOutput
+    logic: |
+      score = state.data.get("quality_score", 0)
+      rounds = state.data.get("refinement_round", 0)
+      threshold = state.data.get("quality_threshold", 7)
+      if score >= threshold:
+          print(f"    Quality threshold met (score={score}). Finalizing after {rounds} refinement(s).")
+      else:
+          print(f"    Max rounds reached (score={score}). Finalizing with best effort after {rounds} round(s).")
+      state.data["final_output"] = state.data.get("current_output", "")
+      state.data["final_score"] = score
+      state.data["total_rounds"] = rounds
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  # Entry flow
+  - type: flow
+    from: receive_task
+    to: generate
+    label: "Start generation"
+
+  # Generate -> Critique
+  - type: invoke
+    from: generate
+    to: generator
+    label: "Generate or refine output"
+    input: GeneratorInput
+    output: GeneratorOutput
+
+  - type: flow
+    from: generate
+    to: critique
+    label: "Send to critic"
+
+  - type: invoke
+    from: critique
+    to: critic
+    label: "Evaluate output quality"
+    input: CriticInput
+    output: CriticOutput
+
+  # Critique -> Quality check
+  - type: flow
+    from: critique
+    to: check_quality
+    label: "Check quality score"
+
+  # Quality gate branches
+  - type: branch
+    from: check_quality
+    to: finalize
+    condition: "quality_score >= 7"
+
+  - type: branch
+    from: check_quality
+    to: check_rounds
+    condition: "quality_score < 7"
+
+  # Rounds gate branches
+  - type: branch
+    from: check_rounds
+    to: refine
+    condition: "refinement_round < max_rounds"
+
+  - type: branch
+    from: check_rounds
+    to: finalize
+    condition: "refinement_round >= max_rounds"
+
+  # Refine loops back to generate
+  - type: flow
+    from: refine
+    to: generate
+    label: "Refine with feedback"
+
+  - type: loop
+    from: refine
+    to: generate
+    label: "Refinement loop"
+    condition: "refinement_round < max_rounds"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: TaskInput
+    description: "The task to generate output for"
+    fields:
+      - { name: task, type: string }
+
+  - name: GeneratorInput
+    description: "Input to the generator agent"
+    fields:
+      - { name: task, type: string }
+      - { name: previous_output, type: string }
+      - { name: specific_feedback, type: string }
+      - { name: refinement_round, type: integer }
+
+  - name: GeneratorOutput
+    description: "Output from the generator agent"
+    fields:
+      - { name: output_text, type: string }
+      - { name: changes_made, type: string }
+
+  - name: CriticInput
+    description: "Input to the critic agent"
+    fields:
+      - { name: task, type: string }
+      - { name: output_text, type: string }
+      - { name: refinement_round, type: integer }
+
+  - name: CriticOutput
+    description: "Output from the critic agent"
+    fields:
+      - { name: quality_score, type: integer }
+      - { name: strengths, type: "list<string>" }
+      - { name: weaknesses, type: "list<string>" }
+      - { name: specific_feedback, type: string }
+
+  - name: FinalOutput
+    description: "The finalized output with quality metadata"
+    fields:
+      - { name: final_output, type: string }
+      - { name: final_score, type: integer }
+      - { name: total_rounds, type: integer }
+      - { name: feedback_history, type: "list<FeedbackEntry>" }
+
+  - name: FeedbackEntry
+    description: "A single round of feedback from the critic"
+    fields:
+      - { name: round_number, type: integer }
+      - { name: quality_score, type: integer }
+      - { name: specific_feedback, type: string }

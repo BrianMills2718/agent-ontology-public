@@ -1,0 +1,46 @@
+# Secrets
+.env
+.env.local
+.env.production
+*.key
+credentials.*
+
+# Runtime artifacts
+trace.json
+traces/
+.live_runs/
+trace_overlay*.json
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Images (screenshots, diagrams — keep source files elsewhere)
+*.png
+*.jpg
+*.jpeg
+
+# Evolution runtime outputs
+evolution*results*.json
+
+# ChromaDB data
+chroma_data/
+
+# Workspace outputs from generated autonomous agents
+autogpt_workspace/
+
+# Python
+*.egg-info/
+dist/
+build/
+venv/
+.venv/

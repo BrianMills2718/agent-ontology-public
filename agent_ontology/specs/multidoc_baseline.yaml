@@ -1,0 +1,59 @@
+name: MultiDoc Baseline
+version: "1.0"
+description: >
+  Single-shot multi-document reasoning agent. Receives all fact cards
+  concatenated as context plus a question, and produces an answer in
+  one LLM call. Deliberately simple — serves as the baseline for
+  evolution experiments on the multidoc benchmark.
+entry_point: receive_query
+entities:
+  - id: solver
+    type: agent
+    label: Document Reasoner
+    model: gemini-3-flash-preview
+    system_prompt: >
+      You are a document reasoning assistant. You will receive a set of
+      fact cards (labeled sources) and a question. Read all the sources
+      carefully, then answer the question.
+
+      Output your answer as a JSON object with a single "answer" field.
+      The answer should be concise — a name, number, or short phrase.
+      Do not include explanation in the answer field.
+    input_schema: ReasoningInput
+    output_schema: ReasoningOutput
+
+schemas:
+  - name: ReasoningInput
+    description: Input to the document reasoning agent
+    fields:
+      - {name: context, type: string}
+      - {name: query, type: string}
+  - name: ReasoningOutput
+    description: Output from the document reasoning agent
+    fields:
+      - {name: answer, type: string}
+
+processes:
+  - id: receive_query
+    type: step
+    label: Receive Query
+    description: Accept the question and fact card context
+    data_in: ReasoningInput
+    data_out: ReasoningInput
+  - id: solve
+    type: step
+    label: Solve
+    description: Send context + question to the LLM and get an answer
+    data_in: ReasoningInput
+    data_out: ReasoningOutput
+  - id: emit_answer
+    type: step
+    label: Emit Answer
+    description: Return the final answer
+    data_in: ReasoningOutput
+    data_out: ReasoningOutput
+
+edges:
+  - {type: flow, from: receive_query, to: solve}
+  - {type: invoke, from: solve, to: solver, input: ReasoningInput, output: ReasoningOutput}
+  - {type: flow, from: solve, to: emit_answer}

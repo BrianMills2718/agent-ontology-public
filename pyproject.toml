@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-ontology"
+version = "0.2.0"
+description = "OpenAPI for Agents — a universal format for describing AI agent architectures"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Brian Mills", email = "brian@agent-ontology.dev"},
+]
+keywords = ["agents", "ontology", "ai", "llm", "architecture", "specification"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Code Generators",
+]
+
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+owl = [
+    "owlready2>=0.40",
+]
+rdf = [
+    "rdflib>=6.0",
+]
+langgraph = [
+    "langgraph>=0.1",
+    "langchain-core>=0.2",
+    "langchain-google-genai>=1.0",
+    "langchain-openai>=0.1",
+    "langchain-anthropic>=0.1",
+]
+agents = [
+    "google-genai>=0.5",
+    "openai>=1.0",
+    "anthropic>=0.20",
+    "chromadb>=0.4",
+]
+all = [
+    "agent-ontology[owl,rdf,langgraph,agents]",
+]
+dev = [
+    "agent-ontology[all]",
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/BrianMills2718/agent_ontology"
+Repository = "https://github.com/BrianMills2718/agent_ontology"
+Documentation = "https://github.com/BrianMills2718/agent_ontology/blob/main/SPEC.md"
+
+[project.scripts]
+ao-validate = "agent_ontology.validate:main"
+ao-instantiate = "agent_ontology.instantiate:main"
+ao-specgen = "agent_ontology.specgen:main"
+ao-verify = "agent_ontology.verify:main"
+ao-recommend = "agent_ontology.recommend:main"
+ao-lint = "agent_ontology.lint:main"
+ao-complexity = "agent_ontology.complexity:main"
+ao-topology = "agent_ontology.topology:main"
+ao-similarity = "agent_ontology.similarity:main"
+ao-mermaid = "agent_ontology.mermaid:main"
+ao-dashboard = "agent_ontology.dashboard:main"
+ao-benchmark = "agent_ontology.benchmark:main"
+ao-migrate = "agent_ontology.migrate:main"
+ao-compose = "agent_ontology.compose:main"
+ao-import-langgraph = "agent_ontology.import_langgraph:main"
+ao-import-crewai = "agent_ontology.import_crewai:main"
+ao-import-autogen = "agent_ontology.import_autogen:main"
+ao-import-openai-agents = "agent_ontology.import_openai_agents:main"
+ao-import-google-adk = "agent_ontology.import_google_adk:main"
+ao-knowledge-store = "agent_ontology.knowledge_store:main"
+ao-evolve = "agent_ontology.evolve:main"
+ao-design = "agent_ontology.design:main"
+ao-ingest = "agent_ontology.ingest:main"
+ao-owl-bridge = "agent_ontology.owl_bridge:main"
+ao-report = "agent_ontology.comparative_report:main"
+ao-mutate = "agent_ontology.mutate:main"
+ao-trace = "agent_ontology.analyze_trace:main"
+ao-trace-overlay = "agent_ontology.trace_overlay_from_calls:main"
+ao-live-viewer = "agent_ontology.live_viewer_server:main"
+ao-live-viewer-v2 = "agent_ontology.v2.api_server:main"
+ao-live-e2e-review = "agent_ontology.live_e2e_review:main"
+ao-live-e2e-fixtures = "agent_ontology.live_e2e_fixtures:main"
+ao-coverage = "agent_ontology.coverage:main"
+ao-patterns = "agent_ontology.patterns:main"
+ao-spec-diff = "agent_ontology.spec_diff:main"
+ao-ontology-owl = "agent_ontology.ontology_owl:main"
+ao-ontology-rdf = "agent_ontology.ontology_rdf:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_ontology*"]
+
+[tool.setuptools.package-data]
+agent_ontology = ["ONTOLOGY.yaml", "spec_schema.json", "specs/*.yaml", "benchmarks/**/*", "v2/*.html"]

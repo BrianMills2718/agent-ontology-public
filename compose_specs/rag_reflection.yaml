@@ -1,0 +1,15 @@
+name: "RAG + Reflexion"
+description: "Retrieval-augmented generation with self-reflection for improved answers"
+version: "1.0"
+model: "gemini-3-flash-preview"
+compose:
+  - pattern: retrieval
+    as: ret
+    config:
+      top_k: 5
+
+  - pattern: reflection
+    as: ref
+    graft_after: ret
+    config:
+      max_trials: 3

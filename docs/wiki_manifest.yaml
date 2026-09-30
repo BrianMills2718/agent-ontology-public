@@ -1,0 +1,12 @@
+version: 1
+project: agent_ontology
+# Agent Ontology
+publish:
+  - path: README.md
+    type: ProjectOverview
+    title: Agent Ontology Overview
+    tags: [portfolio, agent-architecture, code-generation]
+  - path: AGENTS.md
+    type: Methodology
+    title: Agent Ontology Repository Instructions
+    tags: [portfolio, agent-architecture, code-generation]

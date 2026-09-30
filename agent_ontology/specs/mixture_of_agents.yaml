@@ -1,0 +1,421 @@
+# ===================================================================
+# Mixture of Agents (MoA) -- Agent Spec (Agent Ontology v0.2)
+# ===================================================================
+# Implements the Mixture of Agents pattern.
+#
+# Multiple diverse proposer agents generate responses in parallel
+# (layer 1), then an aggregator agent synthesizes the best composite
+# response (layer 2). A quality gate determines whether an additional
+# refinement layer is needed.
+# This tests: spawn with collect aggregation, multi-layer fan-out/
+# fan-in, quality gating, and layered iterative refinement.
+
+name: "Mixture of Agents"
+version: "1.0"
+description: "Mixture of Agents (MoA) architecture: multiple diverse proposer agents generate responses in parallel, then an aggregator synthesizes the best composite response. Supports multi-layer iterative refinement with quality gating."
+entry_point: receive_query
+
+# -- Entities -------------------------------------------------------
+
+entities:
+
+  - id: proposer_analytical
+    type: agent
+    label: "Analytical Proposer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an analytical reasoning agent. Given a query, approach it with rigorous
+      logical analysis. Break down the problem systematically, consider edge cases,
+      and provide a well-structured analytical response.
+      If prior layer responses are provided, build upon their insights while
+      correcting any errors you identify.
+      Output JSON with "response" (string) and "confidence" (float 0-1).
+    input_schema: ProposerInput
+    output_schema: ProposerOutput
+
+  - id: proposer_creative
+    type: agent
+    label: "Creative Proposer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a creative thinking agent. Given a query, approach it with lateral
+      thinking, analogies, and novel perspectives. Consider unconventional angles
+      and generate insightful connections.
+      If prior layer responses are provided, offer fresh perspectives that complement them.
+      Output JSON with "response" (string) and "confidence" (float 0-1).
+    input_schema: ProposerInput
+    output_schema: ProposerOutput
+
+  - id: proposer_critical
+    type: agent
+    label: "Critical Proposer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a critical evaluation agent. Given a query, approach it by questioning
+      assumptions, identifying potential flaws, and stress-testing reasoning.
+      If prior layer responses are provided, critique their weaknesses while
+      offering improved alternatives.
+      Output JSON with "response" (string) and "confidence" (float 0-1).
+    input_schema: ProposerInput
+    output_schema: ProposerOutput
+
+  - id: aggregator_agent
+    type: agent
+    label: "Aggregator Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an aggregator agent in a Mixture of Agents architecture.
+      You receive multiple diverse responses to the same query from different
+      proposer agents. Your job is to:
+      1. Identify the strongest elements from each response.
+      2. Resolve any contradictions by reasoning about which is correct.
+      3. Synthesize a single, comprehensive response that is better than any individual one.
+      4. Assign a quality score (1-10) to the synthesized result.
+      Output JSON with "synthesized_response" (string), "quality_score" (integer 1-10),
+      "sources_used" (list of strings naming which proposers contributed key elements),
+      and "reasoning" (string explaining synthesis decisions).
+    input_schema: AggregatorInput
+    output_schema: AggregatorOutput
+
+  - id: response_store
+    type: store
+    label: "Layer Response Store"
+    store_type: kv
+    schema: LayerSnapshot
+    retention: session
+
+  - id: user
+    type: human
+    label: "User"
+
+# -- Processes ------------------------------------------------------
+
+processes:
+
+  - id: receive_query
+    type: step
+    label: "Receive Query"
+    description: "Accept user query and initialize MoA layer state"
+    data_out: MoAInput
+    logic: |
+      state.data["current_layer"] = 0
+      state.data["max_layers"] = 3
+      state.data["quality_threshold"] = 7
+      state.data["layer_history"] = []
+      state.data["prior_responses"] = []
+      print(f"    Query: {state.data.get('query', '')[:100]}")
+      print(f"    Config: max_layers={state.data['max_layers']}, quality_threshold={state.data['quality_threshold']}")
+
+  - id: increment_layer
+    type: step
+    label: "Increment Layer"
+    description: "Advance the current layer counter and prepare proposer context"
+    logic: |
+      layer = state.data.get("current_layer", 0) + 1
+      state.data["current_layer"] = layer
+      print(f"    Starting layer {layer}/{state.data.get('max_layers', 3)}")
+
+  - id: call_analytical
+    type: step
+    label: "Call Analytical Proposer"
+    description: "Invoke the analytical proposer agent"
+    data_in: ProposerInput
+    data_out: ProposerOutput
+    logic: |
+      print(f"    Analytical proposer processing (layer {state.data.get('current_layer', 1)})...")
+
+  - id: call_creative
+    type: step
+    label: "Call Creative Proposer"
+    description: "Invoke the creative proposer agent"
+    data_in: ProposerInput
+    data_out: ProposerOutput
+    logic: |
+      print(f"    Creative proposer processing (layer {state.data.get('current_layer', 1)})...")
+
+  - id: call_critical
+    type: step
+    label: "Call Critical Proposer"
+    description: "Invoke the critical proposer agent"
+    data_in: ProposerInput
+    data_out: ProposerOutput
+    logic: |
+      print(f"    Critical proposer processing (layer {state.data.get('current_layer', 1)})...")
+
+  - id: collect_proposals
+    type: step
+    label: "Collect Proposals"
+    description: "Gather all proposer responses and prepare input for the aggregator"
+    logic: |
+      proposals = []
+      for key in ["call_analytical_result", "call_creative_result", "call_critical_result"]:
+          result = state.data.get(key, {})
+          resp = result.get("response", "") if isinstance(result, dict) else str(result)
+          if resp:
+              proposals.append(resp)
+      state.data["proposals"] = proposals
+      state.data["proposal_count"] = len(proposals)
+      print(f"    Collected {len(proposals)} proposals for aggregation")
+
+  - id: aggregate_responses
+    type: step
+    label: "Aggregate Responses"
+    description: "Invoke the aggregator agent to synthesize proposer responses"
+    data_in: AggregatorInput
+    data_out: AggregatorOutput
+    logic: |
+      proposals = state.data.get("proposals", [])
+      layer = state.data.get("current_layer", 1)
+      print(f"    Aggregating {len(proposals)} proposals at layer {layer}")
+
+  - id: record_layer
+    type: step
+    label: "Record Layer"
+    description: "Store the current layer results in history"
+    logic: |
+      layer = state.data.get("current_layer", 1)
+      synthesized = state.data.get("synthesized_response", "")
+      quality = state.data.get("quality_score", 0)
+      layer_entry = {
+          "layer": layer,
+          "proposals": state.data.get("proposals", []),
+          "synthesized_response": synthesized,
+          "quality_score": quality,
+          "sources_used": state.data.get("sources_used", []),
+      }
+      history = state.data.get("layer_history", [])
+      history.append(layer_entry)
+      state.data["layer_history"] = history
+      # Feed synthesized response as prior context for next layer
+      prior = state.data.get("prior_responses", [])
+      prior.append(synthesized)
+      state.data["prior_responses"] = prior
+      print(f"    Layer {layer} recorded: quality={quality}")
+
+  - id: quality_gate
+    type: gate
+    label: "Quality Sufficient?"
+    condition: "quality_score >= quality_threshold"
+    branches:
+      - condition: "quality meets threshold"
+        target: finalize_output
+      - condition: "quality below threshold"
+        target: check_layer_limit
+
+  - id: check_layer_limit
+    type: gate
+    label: "More layers allowed?"
+    condition: "current_layer < max_layers"
+    branches:
+      - condition: "layers remaining"
+        target: increment_layer
+      - condition: "max layers reached"
+        target: finalize_output
+
+  - id: finalize_output
+    type: step
+    label: "Finalize Output"
+    description: "Return the final synthesized response with full layer history"
+    data_out: MoAResult
+    logic: |
+      quality = state.data.get("quality_score", 0)
+      layers = state.data.get("current_layer", 1)
+      threshold = state.data.get("quality_threshold", 7)
+      if quality >= threshold:
+          print(f"    Quality threshold met (score={quality}) at layer {layers}. Finalizing.")
+      else:
+          print(f"    Max layers reached (score={quality}). Finalizing with best result.")
+      state.data["final_response"] = state.data.get("synthesized_response", "")
+      state.data["final_quality"] = quality
+      state.data["total_layers"] = layers
+      state.data["_done"] = True
+
+# -- Edges ----------------------------------------------------------
+
+edges:
+
+  # Entry
+  - type: flow
+    from: user
+    to: receive_query
+    label: "User query"
+    data: MoAInput
+
+  - type: flow
+    from: receive_query
+    to: increment_layer
+    label: "Start layer 1"
+
+  # Fan-out to proposers
+  - type: flow
+    from: increment_layer
+    to: call_analytical
+    label: "Analytical path"
+
+  - type: flow
+    from: increment_layer
+    to: call_creative
+    label: "Creative path"
+
+  - type: flow
+    from: increment_layer
+    to: call_critical
+    label: "Critical path"
+
+  # Proposer invocations
+  - type: invoke
+    from: call_analytical
+    to: proposer_analytical
+    label: "Generate analytical response"
+    input: ProposerInput
+    output: ProposerOutput
+
+  - type: invoke
+    from: call_creative
+    to: proposer_creative
+    label: "Generate creative response"
+    input: ProposerInput
+    output: ProposerOutput
+
+  - type: invoke
+    from: call_critical
+    to: proposer_critical
+    label: "Generate critical response"
+    input: ProposerInput
+    output: ProposerOutput
+
+  # Fan-in to collector
+  - type: flow
+    from: call_analytical
+    to: collect_proposals
+    label: "Analytical response"
+
+  - type: flow
+    from: call_creative
+    to: collect_proposals
+    label: "Creative response"
+
+  - type: flow
+    from: call_critical
+    to: collect_proposals
+    label: "Critical response"
+
+  # Aggregation
+  - type: flow
+    from: collect_proposals
+    to: aggregate_responses
+    label: "Aggregate"
+
+  - type: invoke
+    from: aggregate_responses
+    to: aggregator_agent
+    label: "Synthesize proposals"
+    input: AggregatorInput
+    output: AggregatorOutput
+
+  - type: flow
+    from: aggregate_responses
+    to: record_layer
+    label: "Record results"
+
+  # Write layer snapshot to store
+  - type: write
+    from: record_layer
+    to: response_store
+    label: "Persist layer snapshot"
+    data: LayerSnapshot
+
+  - type: flow
+    from: record_layer
+    to: quality_gate
+    label: "Check quality"
+
+  # Quality gate branches
+  - type: branch
+    from: quality_gate
+    to: finalize_output
+    condition: "quality_score >= quality_threshold"
+
+  - type: branch
+    from: quality_gate
+    to: check_layer_limit
+    condition: "quality_score < quality_threshold"
+
+  # Layer limit branches
+  - type: branch
+    from: check_layer_limit
+    to: increment_layer
+    condition: "current_layer < max_layers"
+
+  - type: branch
+    from: check_layer_limit
+    to: finalize_output
+    condition: "current_layer >= max_layers"
+
+  # Layer refinement loop
+  - type: loop
+    from: check_layer_limit
+    to: increment_layer
+    label: "Next MoA layer"
+    condition: "current_layer < max_layers"
+
+  # Read prior layer context
+  - type: read
+    from: collect_proposals
+    to: response_store
+    label: "Read prior layer responses"
+
+# -- Schemas --------------------------------------------------------
+
+schemas:
+
+  - name: MoAInput
+    description: "User query input for the Mixture of Agents system"
+    fields:
+      - { name: query, type: string }
+
+  - name: ProposerInput
+    description: "Input to each proposer agent"
+    fields:
+      - { name: query, type: string }
+      - { name: prior_responses, type: "list<string>" }
+      - { name: current_layer, type: integer }
+
+  - name: ProposerOutput
+    description: "Output from a proposer agent"
+    fields:
+      - { name: response, type: string }
+      - { name: confidence, type: float }
+
+  - name: AggregatorInput
+    description: "Input to the aggregator agent"
+    fields:
+      - { name: query, type: string }
+      - { name: proposals, type: "list<string>" }
+      - { name: current_layer, type: integer }
+      - { name: prior_synthesis, type: string }
+
+  - name: AggregatorOutput
+    description: "Output from the aggregator agent"
+    fields:
+      - { name: synthesized_response, type: string }
+      - { name: quality_score, type: integer }
+      - { name: sources_used, type: "list<string>" }
+      - { name: reasoning, type: string }
+
+  - name: LayerSnapshot
+    description: "Snapshot of a single MoA layer's results"
+    fields:
+      - { name: layer, type: integer }
+      - { name: proposals, type: "list<string>" }
+      - { name: synthesized_response, type: string }
+      - { name: quality_score, type: integer }
+      - { name: sources_used, type: "list<string>" }
+
+  - name: MoAResult
+    description: "Final result from the Mixture of Agents process"
+    fields:
+      - { name: final_response, type: string }
+      - { name: final_quality, type: integer }
+      - { name: total_layers, type: integer }
+      - { name: layer_history, type: "list<LayerSnapshot>" }

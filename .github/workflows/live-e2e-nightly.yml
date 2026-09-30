@@ -1,0 +1,92 @@
+name: Live E2E Nightly
+
+on:
+  schedule:
+    - cron: "15 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly-e2e-fixtures-deterministic:
+    name: Nightly E2E Fixtures (Deterministic)
+    runs-on: ubuntu-latest
+    # `vars` IS available in a job-level `if:` (unlike `secrets`), so this gate
+    # makes the job show as SKIPPED rather than reporting success having done
+    # nothing. CI installs `llm-client` from PyPI and gets a module without
+    # call_llm, which the runtime under test refuses to run without. Set the
+    # repository variable LLM_CLIENT_AVAILABLE=true once CI can reach the real
+    # package, and these jobs light up.
+    if: vars.LLM_CLIENT_AVAILABLE == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + judge client
+        run: |
+          pip install -e .
+          pip install "llm-client>=0.6.0"
+
+      - name: Run deterministic fixture pack
+        run: |
+          ao-live-e2e-fixtures \
+            --fixtures agent_ontology/benchmarks/live_e2e_fixtures.json \
+            --tag ci \
+            --no-judge-default \
+            --json-out .live_runs/nightly_e2e_fixture_pack_deterministic.json
+
+      - name: Upload nightly deterministic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-live-e2e-fixtures-deterministic
+          path: .live_runs/nightly_e2e_fixture_pack_deterministic.json
+          if-no-files-found: warn
+
+  nightly-e2e-strict-judged:
+    name: Nightly E2E Strict Judged
+    runs-on: ubuntu-latest
+    # `vars` IS available in a job-level `if:` (unlike `secrets`), so this gate
+    # makes the job show as SKIPPED rather than reporting success having done
+    # nothing. CI installs `llm-client` from PyPI and gets a module without
+    # call_llm, which the runtime under test refuses to run without. Set the
+    # repository variable LLM_CLIENT_AVAILABLE=true once CI can reach the real
+    # package, and these jobs light up.
+    if: vars.LLM_CLIENT_AVAILABLE == 'true'
+    needs: [nightly-e2e-fixtures-deterministic]
+    # See validate.yml: `secrets` in a job-level `if:` is a parse error.
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + judge client
+        run: |
+          pip install -e .
+          pip install "llm-client>=0.6.0"
+
+      - name: Run strict judged gate
+        if: env.OPENROUTER_API_KEY != ''
+        run: |
+          ao-live-e2e-review \
+            --spec-path agent_ontology/specs/codex.yaml \
+            --text "Use write_file to create artifact.txt containing exactly: done\nThen finish." \
+            --mock-mode deterministic \
+            --capability-profile restricted \
+            --review-profile babyagi_strict \
+            --judge-model openrouter/deepseek/deepseek-chat \
+            --timeout-seconds 180 \
+            --json-out .live_runs/nightly_e2e_review_strict_judged.json
+
+      - name: Upload nightly strict judged artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-live-e2e-review-strict-judged
+          path: .live_runs/nightly_e2e_review_strict_judged.json
+          if-no-files-found: warn

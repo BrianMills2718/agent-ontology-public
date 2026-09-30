@@ -1,0 +1,312 @@
+name: "Voyager Exploration Agent"
+version: "1.0"
+description: "An open-ended exploration agent that autonomously proposes objectives, learns skills, and accumulates them in a persistent library."
+entry_point: start_exploration
+
+entities:
+  - id: curriculum_agent
+    type: agent
+    label: "Curriculum Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Curriculum Agent for Voyager. Your goal is to propose novel and achievable objectives based on the current environment and the skills already discovered.
+      Examine the skill library summary and the environment description.
+      Propose an objective that expands the agent's capabilities.
+    input_schema: CurriculumInput
+    output_schema: ObjectiveOutput
+
+  - id: coder_agent
+    type: agent
+    label: "Code Generation Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Code Generation Agent. You write implementation code to accomplish a specific objective.
+      You have access to a set of retrieved skills that you can call or adapt.
+      If you receive self-reflection feedback from a previous failed attempt, use it to fix the errors.
+      Output the skill name, a brief description, and the complete Python code.
+    input_schema: CoderInput
+    output_schema: CodeOutput
+
+  - id: reflector_agent
+    type: agent
+    label: "Self-Reflection Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Self-Reflection Agent. You evaluate the execution of a generated skill.
+      Compare the intended objective with the actual execution logs and errors.
+      Determine if the objective was met. If not, provide specific feedback on how to fix the code.
+    input_schema: ReflectionInput
+    output_schema: ReflectionOutput
+
+  - id: skill_library
+    type: store
+    label: "Skill Library"
+    store_type: vector
+    schema: SkillEntry
+    description: "A persistent library of successful Python skills/functions."
+
+  - id: environment
+    type: tool
+    label: "Minecraft Environment"
+    tool_type: api
+    description: "The game environment where code is executed."
+    input_schema: ExecutionInput
+    output_schema: ExecutionResult
+
+processes:
+  - id: start_exploration
+    type: step
+    label: "Initialize Exploration"
+    logic: |
+      state.data["iteration_count"] = 0
+      state.data["max_iterations"] = 50
+      state.data["env_description"] = "Spawn point in a forest biome near a river."
+      state.data["reflection_feedback"] = ""
+      state.data["retry_count"] = 0
+
+  - id: propose_objective
+    type: step
+    label: "Propose Objective"
+    data_in: CurriculumInput
+    data_out: ObjectiveOutput
+    logic: |
+      # Prepare input for curriculum agent
+      state.data["curriculum_input"] = {
+        "env_description": state.data.get("env_description"),
+        "skill_summary": "List of currently known skills..." 
+      }
+
+  - id: retrieve_skills
+    type: step
+    label: "Retrieve Relevant Skills"
+    logic: |
+      # Logic to query the skill_library based on the objective
+      objective = state.data.get("objective", "")
+      print(f"Retrieving skills for: {objective}")
+
+  - id: generate_code
+    type: step
+    label: "Generate Skill Code"
+    data_in: CoderInput
+    data_out: CodeOutput
+    logic: |
+      state.data["coder_input"] = {
+        "objective": state.data.get("objective"),
+        "retrieved_skills": state.data.get("retrieved_skills", []),
+        "reflection_feedback": state.data.get("reflection_feedback", "")
+      }
+
+  - id: execute_skill
+    type: step
+    label: "Execute Skill"
+    data_in: ExecutionInput
+    data_out: ExecutionResult
+    logic: |
+      print(f"Executing code for skill: {state.data.get('skill_name')}")
+
+  - id: evaluate_result
+    type: step
+    label: "Evaluate Result"
+    data_in: ReflectionInput
+    data_out: ReflectionOutput
+    logic: |
+      state.data["reflection_input"] = {
+        "objective": state.data.get("objective"),
+        "code": state.data.get("code"),
+        "logs": state.data.get("logs")
+      }
+
+  - id: check_success
+    type: gate
+    label: "Is Skill Successful?"
+    condition: "success == True"
+    branches:
+      - condition: "yes"
+        target: save_skill
+      - condition: "no"
+        target: check_retry_limit
+
+  - id: check_retry_limit
+    type: gate
+    label: "Retry Limit?"
+    condition: "retry_count < 3"
+    branches:
+      - condition: "retry"
+        target: generate_code
+      - condition: "abort"
+        target: increment_iteration
+
+  - id: save_skill
+    type: step
+    label: "Save to Library"
+    logic: |
+      print(f"Saving successful skill: {state.data.get('skill_name')}")
+      state.data["retry_count"] = 0
+      state.data["reflection_feedback"] = ""
+
+  - id: increment_iteration
+    type: step
+    label: "Increment Iteration"
+    logic: |
+      state.data["iteration_count"] += 1
+      state.data["retry_count"] = 0
+      state.data["reflection_feedback"] = ""
+
+  - id: check_exploration_limit
+    type: gate
+    label: "Continue Exploration?"
+    condition: "iteration_count < max_iterations"
+    branches:
+      - condition: "continue"
+        target: propose_objective
+      - condition: "stop"
+        target: end_exploration
+
+  - id: end_exploration
+    type: step
+    label: "End Exploration"
+    logic: "state.data['_done'] = True"
+
+edges:
+  - type: flow
+    from: start_exploration
+    to: propose_objective
+
+  - type: invoke
+    from: propose_objective
+    to: curriculum_agent
+    input: CurriculumInput
+    output: ObjectiveOutput
+
+  - type: flow
+    from: propose_objective
+    to: retrieve_skills
+
+  - type: read
+    from: retrieve_skills
+    to: skill_library
+
+  - type: flow
+    from: retrieve_skills
+    to: generate_code
+
+  - type: invoke
+    from: generate_code
+    to: coder_agent
+    input: CoderInput
+    output: CodeOutput
+
+  - type: flow
+    from: generate_code
+    to: execute_skill
+
+  - type: invoke
+    from: execute_skill
+    to: environment
+    input: ExecutionInput
+    output: ExecutionResult
+
+  - type: flow
+    from: execute_skill
+    to: evaluate_result
+
+  - type: invoke
+    from: evaluate_result
+    to: reflector_agent
+    input: ReflectionInput
+    output: ReflectionOutput
+
+  - type: flow
+    from: evaluate_result
+    to: check_success
+
+  - type: branch
+    from: check_success
+    to: save_skill
+    condition: "success == True"
+
+  - type: branch
+    from: check_success
+    to: check_retry_limit
+    condition: "success == False"
+
+  - type: write
+    from: save_skill
+    to: skill_library
+    data: SkillEntry
+
+  - type: flow
+    from: save_skill
+    to: increment_iteration
+
+  - type: branch
+    from: check_retry_limit
+    to: generate_code
+    condition: "retry_count < 3"
+
+  - type: branch
+    from: check_retry_limit
+    to: increment_iteration
+    condition: "retry_count >= 3"
+
+  - type: flow
+    from: increment_iteration
+    to: check_exploration_limit
+
+  - type: branch
+    from: check_exploration_limit
+    to: propose_objective
+    condition: "iteration_count < max_iterations"
+
+  - type: branch
+    from: check_exploration_limit
+    to: end_exploration
+    condition: "iteration_count >= max_iterations"
+
+schemas:
+  - name: CurriculumInput
+    fields:
+      - { name: env_description, type: string }
+      - { name: skill_summary, type: string }
+
+  - name: ObjectiveOutput
+    fields:
+      - { name: objective, type: string }
+
+  - name: CoderInput
+    fields:
+      - { name: objective, type: string }
+      - { name: retrieved_skills, type: "list<string>" }
+      - { name: reflection_feedback, type: string }
+
+  - name: CodeOutput
+    fields:
+      - { name: skill_name, type: string }
+      - { name: description, type: string }
+      - { name: code, type: string }
+
+  - name: ExecutionInput
+    fields:
+      - { name: code, type: string }
+
+  - name: ExecutionResult
+    fields:
+      - { name: logs, type: string }
+      - { name: success, type: boolean }
+
+  - name: ReflectionInput
+    fields:
+      - { name: objective, type: string }
+      - { name: code, type: string }
+      - { name: logs, type: string }
+
+  - name: ReflectionOutput
+    fields:
+      - { name: success, type: boolean }
+      - { name: feedback, type: string }
+
+  - name: SkillEntry
+    fields:
+      - { name: skill_name, type: string }
+      - { name: code, type: string }
+      - { name: description, type: string }

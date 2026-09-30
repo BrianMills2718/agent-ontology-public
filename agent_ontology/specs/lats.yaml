@@ -1,0 +1,247 @@
+name: "Language Agent Tree Search (LATS)"
+version: "1.0"
+description: "Iterative problem solving using Monte Carlo Tree Search (MCTS) combined with LLM-based action generation and state evaluation."
+entry_point: initialize_search
+
+entities:
+  - id: action_generator
+    type: agent
+    label: "Action Generator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the expansion phase of an MCTS agent. Given a problem statement and a trajectory of previous actions/states, generate candidate next actions.
+      Provide a list of potential actions that could lead toward a solution.
+    input_schema: ExpansionInput
+    output_schema: ActionGeneratorOutput
+
+  - id: state_evaluator
+    type: agent
+    label: "State Evaluator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the evaluation phase of an MCTS agent. Given a problem and a trajectory ending in a new state, evaluate the state.
+      Assign a value from 0 to 1 (0 = dead end, 1 = solution). 
+      Identify if the state is 'terminal' (problem solved) or a 'dead_end'.
+    input_schema: EvaluationInput
+    output_schema: StateEvaluatorOutput
+
+  - id: solution_formatter
+    type: agent
+    label: "Solution Formatter"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the final output phase. Given the best trajectory found during the tree search, format it into a clear, concise final answer for the user.
+    input_schema: FormatterInput
+    output_schema: FinalSolution
+
+  - id: tree_store
+    type: store
+    label: "MCTS Tree Store"
+    store_type: blackboard
+    schema: TreeData
+    retention: session
+
+  - id: user
+    type: human
+    label: "User"
+
+processes:
+  - id: initialize_search
+    type: step
+    label: "Initialize Search"
+    description: "Setup the root node and search parameters"
+    data_in: LATSInput
+    logic: |
+      state.data["iteration"] = 0
+      state.data["is_terminal"] = False
+      state.data["best_score"] = 0.0
+      state.data["tree"] = {"root": {"query": state.data.get("query"), "children": [], "visits": 0, "value": 0}}
+      print(f"Starting LATS for: {state.data.get('query')}")
+
+  - id: select_node
+    type: step
+    label: "Selection"
+    description: "Select a leaf node to expand using UCT logic"
+    logic: |
+      # Logic to traverse the tree in state.data['tree'] using UCT
+      # For this spec, we identify the 'current_trajectory' to expand
+      state.data["current_trajectory"] = state.data.get("tree", {}).get("root", {}).get("query", "")
+      print(f"Selecting node for iteration {state.data['iteration']}")
+
+  - id: expand_node
+    type: step
+    label: "Expansion"
+    description: "Generate candidate actions for the selected node"
+    data_in: ExpansionInput
+    data_out: ActionGeneratorOutput
+    logic: |
+      state.data["expansion_input"] = {
+        "problem": state.data.get("query"),
+        "trajectory": state.data.get("current_trajectory")
+      }
+
+  - id: evaluate_node
+    type: step
+    label: "Evaluation"
+    description: "Evaluate the newly generated states"
+    data_in: EvaluationInput
+    data_out: StateEvaluatorOutput
+    logic: |
+      # Prepare input for the evaluator based on the last action from action_generator
+      actions = state.data.get("action_generator_output", {}).get("actions", [])
+      state.data["evaluation_input"] = {
+        "problem": state.data.get("query"),
+        "trajectory": state.data.get("current_trajectory"),
+        "new_state": actions[0] if actions else "No action"
+      }
+
+  - id: backpropagate
+    type: step
+    label: "Backpropagation"
+    description: "Update tree statistics with the evaluation result"
+    logic: |
+      eval_result = state.data.get("state_evaluator_output", {})
+      score = eval_result.get("score", 0.0)
+      state.data["is_terminal"] = eval_result.get("is_terminal", False)
+      state.data["iteration"] += 1
+      if score > state.data["best_score"]:
+          state.data["best_score"] = score
+          state.data["best_trajectory"] = state.data.get("current_trajectory")
+      print(f"Iteration {state.data['iteration']} complete. Score: {score}")
+
+  - id: check_termination
+    type: gate
+    label: "Search Finished?"
+    condition: "is_terminal == True or iteration >= 30"
+    branches:
+      - condition: "continue"
+        target: select_node
+      - condition: "finish"
+        target: format_output
+
+  - id: format_output
+    type: step
+    label: "Format Output"
+    description: "Prepare the final solution"
+    data_in: FormatterInput
+    data_out: FinalSolution
+    logic: |
+      state.data["formatter_input"] = {
+        "problem": state.data.get("query"),
+        "best_trajectory": state.data.get("best_trajectory", "No solution found")
+      }
+
+  - id: finalize
+    type: step
+    label: "Finalize"
+    logic: |
+      state.data["_done"] = True
+      print("LATS process complete.")
+
+edges:
+  - type: flow
+    from: user
+    to: initialize_search
+    label: "User Query"
+
+  - type: flow
+    from: initialize_search
+    to: select_node
+
+  - type: read
+    from: select_node
+    to: tree_store
+    label: "Read Tree State"
+
+  - type: flow
+    from: select_node
+    to: expand_node
+
+  - type: invoke
+    from: expand_node
+    to: action_generator
+    input: ExpansionInput
+    output: ActionGeneratorOutput
+
+  - type: flow
+    from: expand_node
+    to: evaluate_node
+
+  - type: invoke
+    from: evaluate_node
+    to: state_evaluator
+    input: EvaluationInput
+    output: StateEvaluatorOutput
+
+  - type: flow
+    from: evaluate_node
+    to: backpropagate
+
+  - type: write
+    from: backpropagate
+    to: tree_store
+    label: "Update Tree"
+
+  - type: flow
+    from: backpropagate
+    to: check_termination
+
+  - type: branch
+    from: check_termination
+    to: select_node
+    condition: "is_terminal == False and iteration < 30"
+
+  - type: branch
+    from: check_termination
+    to: format_output
+    condition: "is_terminal == True or iteration >= 30"
+
+  - type: invoke
+    from: format_output
+    to: solution_formatter
+    input: FormatterInput
+    output: FinalSolution
+
+  - type: flow
+    from: format_output
+    to: finalize
+
+schemas:
+  - name: LATSInput
+    fields:
+      - { name: query, type: string }
+
+  - name: ExpansionInput
+    fields:
+      - { name: problem, type: string }
+      - { name: trajectory, type: string }
+
+  - name: ActionGeneratorOutput
+    fields:
+      - { name: actions, type: "list<string>" }
+
+  - name: EvaluationInput
+    fields:
+      - { name: problem, type: string }
+      - { name: trajectory, type: string }
+      - { name: new_state, type: string }
+
+  - name: StateEvaluatorOutput
+    fields:
+      - { name: score, type: float }
+      - { name: is_terminal, type: boolean }
+
+  - name: FormatterInput
+    fields:
+      - { name: problem, type: string }
+      - { name: best_trajectory, type: string }
+
+  - name: FinalSolution
+    fields:
+      - { name: answer, type: string }
+
+  - name: TreeData
+    fields:
+      - { name: tree, type: object }
+      - { name: iteration, type: integer }
+      - { name: best_score, type: float }

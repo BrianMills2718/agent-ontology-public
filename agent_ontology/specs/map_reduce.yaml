@@ -1,0 +1,263 @@
+name: "MapReduce Document Processor"
+version: "1.0"
+description: "A parallel document processing architecture that splits large texts into chunks, analyzes them in parallel, and synthesizes the results using a MapReduce pattern."
+entry_point: chunk_document
+
+entities:
+  - id: map_agent
+    type: agent
+    label: "Map Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a specialized analysis agent. You will receive a document chunk and a specific analysis task.
+      Your goal is to extract all relevant information from this chunk according to the task.
+      Provide a relevance score (0-1) for how much useful information was found in this specific chunk.
+      Include metadata about the chunk if relevant.
+    input_schema: MapTaskInput
+    output_schema: ChunkResult
+
+  - id: reduce_agent
+    type: agent
+    label: "Reduce Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a synthesis agent. You will receive a list of findings extracted from different parts of a large document.
+      Your task is to reconcile conflicting information, deduplicate overlapping findings, and synthesize a single coherent final report.
+      Establish cross-chunk references where necessary.
+      Provide a confidence score (0-1) for the final synthesis.
+      If the input data is insufficient or contradictory, lower the confidence score.
+    input_schema: ReduceTaskInput
+    output_schema: ReduceOutputSchema
+
+  - id: document_store
+    type: store
+    label: "Document and Results Store"
+    store_type: kv
+    schema: MapReduceState
+    retention: session
+
+  - id: user
+    type: human
+    label: "User"
+
+processes:
+  - id: chunk_document
+    type: step
+    label: "Chunk Document"
+    description: "Split the input document into overlapping chunks based on token size."
+    data_in: MapReduceInput
+    data_out: ChunkList
+    logic: |
+      text = state.data.get("full_text", "")
+      chunk_size = state.data.get("chunk_size", 1000)
+      overlap = int(chunk_size * 0.1)
+      
+      # Mock chunking logic
+      chunks = []
+      words = text.split()
+      for i in range(0, len(words), chunk_size - overlap):
+          chunk_text = " ".join(words[i:i + chunk_size])
+          chunks.append({
+              "chunk_id": f"chunk_{len(chunks)}",
+              "content": chunk_text,
+              "start_offset": i,
+              "end_offset": i + len(chunk_text)
+          })
+      
+      state.data["chunks"] = chunks
+      state.data["chunk_count"] = len(chunks)
+      state.data["retry_count"] = 0
+      print(f"Document split into {len(chunks)} chunks.")
+
+  - id: map_chunks
+    type: spawn
+    label: "Map Chunks"
+    description: "Spawn parallel agents to process each document chunk."
+    template: map_agent
+    cardinality: dynamic
+    determined_by: chunk_document
+    aggregation: collect
+
+  - id: shuffle_results
+    type: step
+    label: "Shuffle and Group"
+    description: "Group and deduplicate findings from parallel map tasks."
+    logic: |
+      # Collect results from the 'map_chunks' spawn process
+      # Results are typically found in state.data['chunk_result'] as a list
+      raw_results = state.data.get("chunk_result", [])
+      
+      # Deduplication logic based on content similarity or offsets
+      deduplicated = []
+      seen_findings = set()
+      for res in raw_results:
+          for finding in res.get("findings", []):
+              if finding not in seen_findings:
+                  deduplicated.append(finding)
+                  seen_findings.add(finding)
+      
+      state.data["deduplicated_results"] = deduplicated
+      print(f"Shuffle complete. {len(deduplicated)} unique findings identified.")
+
+  - id: reduce_results
+    type: step
+    label: "Reduce Results"
+    description: "Prepare deduplicated data and invoke the Reduce Agent for synthesis."
+    data_in: DeduplicatedResults
+    data_out: ReduceOutputSchema
+    logic: |
+      state.data["retry_count"] = state.data.get("retry_count", 0) + 1
+      # Prepare the input for the reduce agent
+      state.data["reduce_input"] = {
+          "task_description": state.data.get("task_description"),
+          "findings": state.data.get("deduplicated_results", [])
+      }
+
+  - id: check_quality
+    type: gate
+    label: "Check Quality"
+    condition: "confidence_score >= 0.7"
+    branches:
+      - condition: "confidence >= 0.7 or retries exhausted"
+        target: finalize_output
+      - condition: "confidence < 0.7 and retries < 2"
+        target: reduce_results
+
+  - id: finalize_output
+    type: step
+    label: "Finalize Output"
+    description: "Format the final MapReduce output and finish."
+    data_in: ReduceOutputSchema
+    data_out: MapReduceOutput
+    logic: |
+      reduce_out = state.data.get("reduce_output_schema", {})
+      state.data["final_output"] = {
+          "analysis": reduce_out.get("analysis"),
+          "provenance": reduce_out.get("provenance"),
+          "confidence": reduce_out.get("confidence_score"),
+          "stats": {
+              "chunks": state.data.get("chunk_count"),
+              "retries": state.data.get("retry_count")
+          }
+      }
+      state.data["_done"] = True
+
+edges:
+  - type: flow
+    from: user
+    to: chunk_document
+    label: "Submit Document"
+
+  - type: flow
+    from: chunk_document
+    to: map_chunks
+    label: "Distribute Chunks"
+
+  - type: invoke
+    from: map_chunks
+    to: map_agent
+    label: "Analyze Chunk"
+    input: MapTaskInput
+    output: ChunkResult
+
+  - type: flow
+    from: map_chunks
+    to: shuffle_results
+    label: "Collect Results"
+
+  - type: flow
+    from: shuffle_results
+    to: reduce_results
+    label: "Start Synthesis"
+
+  - type: invoke
+    from: reduce_results
+    to: reduce_agent
+    label: "Synthesize Findings"
+    input: ReduceTaskInput
+    output: ReduceOutputSchema
+
+  - type: flow
+    from: reduce_results
+    to: check_quality
+    label: "Evaluate Confidence"
+
+  - type: branch
+    from: check_quality
+    to: finalize_output
+    condition: "confidence_score >= 0.7 or retry_count >= 2"
+
+  - type: branch
+    from: check_quality
+    to: reduce_results
+    condition: "confidence_score < 0.7 and retry_count < 2"
+    label: "Retry Synthesis"
+
+  - type: write
+    from: finalize_output
+    to: document_store
+    label: "Persist Final Result"
+
+schemas:
+  - name: MapReduceInput
+    description: "Initial input for the MapReduce process"
+    fields:
+      - { name: full_text, type: string }
+      - { name: task_description, type: string }
+      - { name: chunk_size, type: integer }
+
+  - name: Chunk
+    fields:
+      - { name: chunk_id, type: string }
+      - { name: content, type: string }
+      - { name: start_offset, type: integer }
+      - { name: end_offset, type: integer }
+
+  - name: ChunkList
+    fields:
+      - { name: chunks, type: "list<Chunk>" }
+
+  - name: MapTaskInput
+    fields:
+      - { name: chunk, type: Chunk }
+      - { name: task_description, type: string }
+
+  - name: ChunkResult
+    fields:
+      - { name: findings, type: "list<string>" }
+      - { name: relevance_score, type: float }
+      - { name: metadata, type: object }
+
+  - name: DeduplicatedResults
+    fields:
+      - { name: findings, type: "list<string>" }
+
+  - name: ReduceTaskInput
+    fields:
+      - { name: task_description, type: string }
+      - { name: findings, type: "list<string>" }
+
+  - name: ReduceOutputSchema
+    fields:
+      - { name: analysis, type: string }
+      - { name: confidence_score, type: float }
+      - { name: provenance, type: "list<ProvenanceItem>" }
+
+  - name: ProvenanceItem
+    fields:
+      - { name: finding, type: string }
+      - { name: source_chunk_id, type: string }
+
+  - name: MapReduceOutput
+    fields:
+      - { name: analysis, type: string }
+      - { name: provenance, type: "list<ProvenanceItem>" }
+      - { name: confidence, type: float }
+      - { name: stats, type: object }
+
+  - name: MapReduceState
+    fields:
+      - { name: full_text, type: string }
+      - { name: chunks, type: "list<Chunk>" }
+      - { name: deduplicated_results, type: "list<string>" }
+      - { name: final_output, type: MapReduceOutput }

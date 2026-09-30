@@ -1,0 +1,138 @@
+name: "RAP (Reasoning via Planning)"
+version: "1.0"
+description: >
+  RAP agent: LLM as world model + MCTS search for multi-step reasoning.
+  The world model predicts state transitions; MCTS searches over the
+  resulting tree to find optimal reasoning paths. Based on Hao et al. 2023.
+entry_point: receive_problem
+
+entities:
+  - id: world_model_agent
+    type: agent
+    label: "World Model (LLM)"
+    model: "gemini-3-flash-preview"
+    system_prompt: >
+      You are a world model. Given a current state and a proposed action,
+      predict the next state. Also evaluate how promising this state is
+      for reaching the goal (reward 0-10).
+      Output JSON: {"next_state": "...", "reward": N, "is_terminal": true/false}
+    input_schema: WorldModelInput
+    output_schema: WorldModelOutput
+
+  - id: action_proposer
+    type: agent
+    label: "Action Proposer"
+    model: "gemini-3-flash-preview"
+    system_prompt: >
+      Given the current reasoning state and the goal, propose 2-3 possible
+      next actions (reasoning steps). Each action should be a concrete
+      thought or operation that advances toward the goal.
+      Output JSON: {"actions": ["action1", "action2", ...]}
+    input_schema: ActionInput
+    output_schema: ActionOutput
+
+  - id: world_sim
+    type: world_model
+    label: "LLM World Simulator"
+    model_type: llm_simulated
+    state_schema: ReasoningState
+    action_schema: ActionOutput
+    deterministic: false
+
+  - id: search_tree
+    type: store
+    label: "MCTS Search Tree"
+    store_type: kv
+    retention: ephemeral
+
+schemas:
+  - name: WorldModelInput
+    fields:
+      - { name: current_state, type: string }
+      - { name: action, type: string }
+      - { name: goal, type: string }
+  - name: WorldModelOutput
+    fields:
+      - { name: next_state, type: string }
+      - { name: reward, type: float }
+      - { name: is_terminal, type: boolean }
+  - name: ActionInput
+    fields:
+      - { name: current_state, type: string }
+      - { name: goal, type: string }
+  - name: ActionOutput
+    fields:
+      - { name: actions, type: "list<string>" }
+  - name: ReasoningState
+    fields:
+      - { name: state_text, type: string }
+      - { name: depth, type: integer }
+      - { name: value, type: float }
+      - { name: visits, type: integer }
+
+processes:
+  - id: receive_problem
+    type: step
+    label: "Receive Problem"
+    logic: |
+      state.data["goal"] = state.data.get("problem", state.data.get("query", ""))
+      state.data["current_state"] = "Initial state: " + state.data["goal"]
+      state.data["best_path"] = []
+      state.data["best_reward"] = 0
+      state.data["iteration"] = 0
+      state.data["max_iterations"] = state.data.get("max_iterations", 5)
+
+  - id: mcts_search
+    type: search
+    label: "MCTS Search"
+    algorithm: mcts
+    evaluation_function: evaluate_state
+    max_iterations: 5
+    branching_factor: 3
+    exploration_weight: 1.4
+
+  - id: propose_actions
+    type: step
+    label: "Propose Actions"
+
+  - id: evaluate_state
+    type: step
+    label: "Evaluate State (World Model)"
+
+  - id: check_done
+    type: gate
+    label: "Search Complete?"
+    condition: "iteration >= max_iterations"
+    branches:
+      - { condition: "iteration >= max_iterations", target: emit_result }
+      - { condition: "iteration < max_iterations", target: propose_actions }
+
+  - id: update_tree
+    type: step
+    label: "Update Search Tree"
+    logic: |
+      state.data["iteration"] = state.data.get("iteration", 0) + 1
+      reward = state.data.get("reward", 0)
+      if reward > state.data.get("best_reward", 0):
+          state.data["best_reward"] = reward
+          state.data["best_path"] = state.data.get("current_path", [])
+
+  - id: emit_result
+    type: step
+    label: "Emit Best Result"
+    logic: |
+      state.data["answer"] = state.data.get("current_state", "")
+      state.data["reasoning_path"] = state.data.get("best_path", [])
+      state.data["_done"] = True
+
+edges:
+  - { type: flow, from: receive_problem, to: propose_actions }
+  - { type: invoke, from: propose_actions, to: action_proposer, input: ActionInput, output: ActionOutput }
+  - { type: flow, from: propose_actions, to: evaluate_state }
+  - { type: invoke, from: evaluate_state, to: world_model_agent, input: WorldModelInput, output: WorldModelOutput }
+  - { type: flow, from: evaluate_state, to: update_tree }
+  - { type: write, from: update_tree, to: search_tree }
+  - { type: flow, from: update_tree, to: check_done }
+  - { type: branch, from: check_done, to: emit_result, condition: "iteration >= max_iterations" }
+  - { type: branch, from: check_done, to: propose_actions, condition: "iteration < max_iterations" }
+  - { type: loop, from: check_done, to: propose_actions, condition: "iteration < max_iterations", max_iterations: 10 }

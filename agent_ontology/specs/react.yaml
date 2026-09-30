@@ -1,0 +1,316 @@
+# ═══════════════════════════════════════════════════════════════
+# ReAct Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Implements the Reason + Act pattern from Yao et al. 2022.
+# The agent alternates between reasoning (Thought) and acting
+# (Action → Observation) until it reaches an answer.
+
+name: "ReAct"
+version: "1.0"
+description: "Reason + Act agent that interleaves thinking with tool use to solve problems"
+entry_point: receive_query
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: reasoning_agent
+    type: agent
+    label: "Reasoning Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a ReAct agent. You solve problems by alternating between Thought and Action steps.
+
+      For each step, decide on ONE of three step types:
+      1. "thought" — reason about what to do next (set the thought field)
+      2. "action" — call a tool (set type to "action", and set tool_name and tool_input)
+      3. "answer" — provide your final answer when you have enough info (set the answer field)
+
+      Available tools:
+      - search: search Wikipedia for factual information
+      - lookup: get the full Wikipedia article intro for a specific term
+      - calculate: evaluate a mathematical expression (e.g. "2**10" or "sqrt(144)")
+
+      You will receive the full trajectory so far (all previous Thoughts, Actions, and Observations).
+      Continue from where you left off. Output only ONE step as JSON.
+    input_schema: ReActInput
+    output_schema: ReActStep
+
+  - id: search_tool
+    type: tool
+    label: "Search"
+    tool_type: api
+    description: "Web search for factual information"
+    input_schema: ToolInput
+    output_schema: ToolOutput
+
+  - id: lookup_tool
+    type: tool
+    label: "Lookup"
+    tool_type: api
+    description: "Look up a specific term or entity"
+    input_schema: ToolInput
+    output_schema: ToolOutput
+
+  - id: calculate_tool
+    type: tool
+    label: "Calculate"
+    tool_type: function
+    description: "Evaluate a mathematical expression"
+    input_schema: ToolInput
+    output_schema: ToolOutput
+
+  - id: trajectory_store
+    type: store
+    label: "Trajectory"
+    store_type: queue
+    schema: TrajectoryEntry
+    retention: session
+
+  - id: user
+    type: human
+    label: "User"
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_query
+    type: step
+    label: "Receive Query"
+    description: "Accept user query and initialize the trajectory"
+    data_out: ReActInput
+    logic: |
+      state.data["trajectory"] = []
+      state.data["step_count"] = 0
+      state.data["max_steps"] = 10
+      print(f"    Query: {state.data.get('query', '')}")
+
+  - id: think_or_act
+    type: step
+    label: "Think / Act"
+    description: "Send trajectory to reasoning agent, get next Thought, Action, or Answer"
+    data_in: ReActInput
+    data_out: ReActStep
+    logic: |
+      state.data["step_count"] = state.data.get("step_count", 0) + 1
+      print(f"    Step {state.data['step_count']}/{state.data.get('max_steps', 10)}")
+
+  - id: check_step_type
+    type: gate
+    label: "Step type?"
+    condition: "type == answer"
+    branches:
+      - condition: "is answer"
+        target: emit_answer
+      - condition: "is thought or action"
+        target: check_action
+
+  - id: check_action
+    type: gate
+    label: "Has action?"
+    condition: "tool_name is not empty"
+    branches:
+      - condition: "no tool_name (thought only)"
+        target: record_step
+      - condition: "has tool_name"
+        target: execute_action
+
+  - id: execute_action
+    type: step
+    label: "Execute Action"
+    description: "Run the tool specified in the action and capture observation"
+    data_in: ReActStep
+    data_out: Observation
+    logic: |
+      action = state.data.get("action", "")
+      tool_name = state.data.get("tool_name", "search")
+      tool_input = state.data.get("tool_input", action)
+      print(f"    Action[{tool_name}]: {tool_input[:100]}")
+
+  - id: record_step
+    type: step
+    label: "Record Step"
+    description: "Append the current step (thought/action/observation) to trajectory"
+    logic: |
+      # The prompt asks for tool_name/tool_input on an action, not the free-text
+      # `action` field; record what actually ran so the next step can see it.
+      _action = state.data.get("action", "")
+      if not _action and state.data.get("tool_name"):
+          _action = f"{state.data.get('tool_name')}[{state.data.get('tool_input', '')}]"
+      elif not _action and state.data.get("tool_calls"):
+          _action = json.dumps(state.data.get("tool_calls"), default=str)
+      step = {
+          "step_num": state.data.get("step_count", 0),
+          "thought": state.data.get("thought", ""),
+          "action": _action,
+          "observation": state.data.get("observation", ""),
+      }
+      trajectory = state.data.get("trajectory", [])
+      trajectory.append(step)
+      state.data["trajectory"] = trajectory
+      print(f"    Trajectory length: {len(trajectory)}")
+
+  - id: check_max_steps
+    type: gate
+    label: "Max steps?"
+    condition: "step_count >= max_steps"
+    branches:
+      - condition: "under limit"
+        target: think_or_act
+      - condition: "at limit"
+        target: emit_answer
+
+  - id: emit_answer
+    type: step
+    label: "Emit Answer"
+    description: "Return the final answer to the user"
+    data_out: Answer
+    logic: |
+      answer = state.data.get("answer") or state.data.get("thought") or "No answer found"
+      state.data["answer"] = answer
+      print(f"    Final Answer: {answer[:200]}")
+      state.data["_done"] = True
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  - type: flow
+    from: user
+    to: receive_query
+    label: "User query"
+    data: UserQuery
+
+  - type: flow
+    from: receive_query
+    to: think_or_act
+    label: "Start reasoning"
+
+  - type: invoke
+    from: think_or_act
+    to: reasoning_agent
+    label: "Get next step"
+    input: ReActInput
+    output: ReActStep
+
+  - type: flow
+    from: think_or_act
+    to: check_step_type
+    label: "Check step type"
+
+  - type: invoke
+    from: execute_action
+    to: search_tool
+    label: "Search"
+    input: ToolInput
+    output: ToolOutput
+
+  - type: invoke
+    from: execute_action
+    to: lookup_tool
+    label: "Lookup"
+    input: ToolInput
+    output: ToolOutput
+
+  - type: invoke
+    from: execute_action
+    to: calculate_tool
+    label: "Calculate"
+    input: ToolInput
+    output: ToolOutput
+
+  - type: flow
+    from: check_action
+    to: execute_action
+    label: "Execute"
+
+  - type: flow
+    from: check_action
+    to: record_step
+    label: "Record thought"
+
+  - type: flow
+    from: check_step_type
+    to: emit_answer
+    label: "Final answer"
+
+  - type: flow
+    from: execute_action
+    to: record_step
+    label: "Record observation"
+
+  - type: flow
+    from: record_step
+    to: check_max_steps
+    label: "Check step limit"
+
+  - type: write
+    from: record_step
+    to: trajectory_store
+    label: "Persist step"
+    data: TrajectoryEntry
+
+  - type: loop
+    from: check_max_steps
+    to: think_or_act
+    label: "Continue reasoning"
+    condition: "step_count < max_steps"
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: ReActInput
+    description: "Input to the reasoning agent"
+    fields:
+      - { name: query, type: string }
+      - { name: trajectory, type: "list<TrajectoryEntry>" }
+      - { name: step_count, type: integer }
+
+  - name: ReActStep
+    description: "One reasoning or action step"
+    fields:
+      - { name: type, type: "enum[thought, action, answer]" }
+      - { name: thought, type: string }
+      - { name: action, type: string }
+      - { name: tool_name, type: string }
+      - { name: tool_input, type: string }
+      - { name: answer, type: string }
+
+  - name: ToolInput
+    description: "Input to a tool"
+    fields:
+      - { name: tool_name, type: string }
+      - { name: input, type: string }
+
+  - name: ToolOutput
+    description: "Output from a tool"
+    fields:
+      - { name: output, type: string }
+      - { name: success, type: boolean }
+
+  - name: Observation
+    description: "Result of executing an action"
+    fields:
+      - { name: observation, type: string }
+      - { name: tool_name, type: string }
+
+  - name: TrajectoryEntry
+    description: "One step in the trajectory"
+    fields:
+      - { name: step_num, type: integer }
+      - { name: thought, type: string }
+      - { name: action, type: string }
+      - { name: observation, type: string }
+
+  - name: UserQuery
+    description: "User's question to the agent"
+    fields:
+      - { name: query, type: string }
+
+  - name: Answer
+    description: "Final answer"
+    fields:
+      - { name: answer, type: string }
+      - { name: trajectory, type: "list<TrajectoryEntry>" }

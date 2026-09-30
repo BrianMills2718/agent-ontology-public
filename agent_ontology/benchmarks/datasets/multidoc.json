@@ -1,0 +1,330 @@
+{
+  "name": "MultiDoc",
+  "description": "Multi-document reasoning with traps. 25 questions requiring cross-referencing 3-5 fact cards. Designed to differentiate single-shot vs multi-step agent architectures.",
+  "source": "Custom benchmark (Agent Ontology project, 2026)",
+  "scoring": ["em", "f1"],
+  "design_notes": "Each question requires combining information from multiple fact cards. Trap types test whether the agent verifies sources, detects contradictions, handles negation, and aggregates correctly. A single LLM call with all facts concatenated may work on easy ones but should struggle on hard cross-reference + trap combinations.",
+  "examples": [
+    {
+      "id": "md_00",
+      "difficulty": "easy",
+      "trap_type": "none",
+      "fact_cards": [
+        {"id": "A", "text": "Meridian Technologies was founded in 2015 by Dr. Sarah Chen. The company is headquartered in Austin, Texas and specializes in renewable energy storage."},
+        {"id": "B", "text": "Dr. Sarah Chen holds a PhD in Materials Science from MIT, awarded in 2012. Before founding Meridian Technologies, she worked at SolarEdge for three years."},
+        {"id": "C", "text": "Meridian Technologies reported annual revenue of $45 million in 2024. The company employs 230 people across three offices."}
+      ],
+      "question": "Where did the founder of Meridian Technologies earn her PhD?",
+      "answer": "MIT"
+    },
+    {
+      "id": "md_01",
+      "difficulty": "easy",
+      "trap_type": "none",
+      "fact_cards": [
+        {"id": "A", "text": "The Oakville Public Library was established in 1923. It currently holds over 180,000 volumes and serves a population of approximately 42,000 residents."},
+        {"id": "B", "text": "In 2024, the Oakville Public Library received a $2.5 million renovation grant from the Henderson Foundation. The renovation will add a new children's wing and digital media center."},
+        {"id": "C", "text": "The Henderson Foundation was created in 1998 by Margaret Henderson, a retired school principal. The foundation focuses on education and literacy programs in small towns."}
+      ],
+      "question": "Who created the foundation that funded the Oakville library renovation?",
+      "answer": "Margaret Henderson"
+    },
+    {
+      "id": "md_02",
+      "difficulty": "easy",
+      "trap_type": "none",
+      "fact_cards": [
+        {"id": "A", "text": "NovaBright Pharmaceuticals developed the drug Zeltrion, which received FDA approval in March 2024 for treating chronic migraines."},
+        {"id": "B", "text": "Clinical trials for Zeltrion showed a 62% reduction in migraine frequency among patients who took the drug for 12 weeks. The trials enrolled 1,200 participants across 15 hospitals."},
+        {"id": "C", "text": "NovaBright Pharmaceuticals was acquired by GlobalHealth Corp in January 2025 for $3.2 billion."}
+      ],
+      "question": "How many participants were enrolled in the clinical trials for the drug that NovaBright developed?",
+      "answer": "1200"
+    },
+    {
+      "id": "md_03",
+      "difficulty": "easy",
+      "trap_type": "arithmetic",
+      "fact_cards": [
+        {"id": "A", "text": "Pinewood School District has three elementary schools: Lincoln (420 students), Roosevelt (380 students), and Jefferson (295 students)."},
+        {"id": "B", "text": "The district also has one middle school, Adams Middle, with 510 students, and one high school, Washington High, with 620 students."},
+        {"id": "C", "text": "The district's annual budget is $18.5 million, funded primarily through local property taxes."}
+      ],
+      "question": "What is the total number of elementary school students in Pinewood School District?",
+      "answer": "1095"
+    },
+    {
+      "id": "md_04",
+      "difficulty": "easy",
+      "trap_type": "none",
+      "fact_cards": [
+        {"id": "A", "text": "The Cascade River Trail in Olympic National Park is 8.4 miles long and gains 2,100 feet of elevation. It is rated as moderate difficulty."},
+        {"id": "B", "text": "Olympic National Park received 3.1 million visitors in 2024. The most popular trail is the Hoh Rain Forest Trail, followed by the Cascade River Trail."},
+        {"id": "C", "text": "The Cascade River Trail was closed for maintenance from October 2024 through March 2025 due to storm damage along the first two miles."}
+      ],
+      "question": "How long is the second most popular trail in Olympic National Park?",
+      "answer": "8.4 miles"
+    },
+    {
+      "id": "md_05",
+      "difficulty": "medium",
+      "trap_type": "contradiction",
+      "fact_cards": [
+        {"id": "A", "text": "Thornton Industries reported Q3 2024 revenue of $12.8 million, representing a 15% increase over Q3 2023. The CEO attributed growth to expansion into European markets."},
+        {"id": "B", "text": "According to an independent audit released in January 2025, Thornton Industries' actual Q3 2024 revenue was $10.2 million. The audit found that the company had prematurely recognized $2.6 million in revenue from contracts not yet fulfilled."},
+        {"id": "C", "text": "Thornton Industries was founded in 2018 and went public in 2022. Its stock price peaked at $34 per share in August 2024."}
+      ],
+      "question": "What was Thornton Industries' actual Q3 2024 revenue according to the independent audit?",
+      "answer": "$10.2 million"
+    },
+    {
+      "id": "md_06",
+      "difficulty": "medium",
+      "trap_type": "contradiction",
+      "fact_cards": [
+        {"id": "A", "text": "The city of Millbrook's official tourism website states that the historic Millbrook Bridge was built in 1887 and is the oldest covered bridge in the state."},
+        {"id": "B", "text": "A 2024 structural survey of the Millbrook Bridge found original timber dating to 1903, suggesting the bridge was actually built approximately 16 years later than traditionally claimed."},
+        {"id": "C", "text": "The Millbrook Bridge spans Deer Creek and is 94 feet long. It was added to the National Register of Historic Places in 1975."}
+      ],
+      "question": "Based on the structural survey evidence, when was the Millbrook Bridge most likely built?",
+      "answer": "1903"
+    },
+    {
+      "id": "md_07",
+      "difficulty": "medium",
+      "trap_type": "misleading_detail",
+      "fact_cards": [
+        {"id": "A", "text": "Professor James Wright published 47 research papers during his career at Stanford University. He was awarded the Fields Medal in 2018 for his work on algebraic topology."},
+        {"id": "B", "text": "The Fields Medal is awarded every four years to mathematicians under the age of 40. Wright was 38 when he received the award."},
+        {"id": "C", "text": "Wright also received the Wolf Prize in Mathematics in 2022 and the Abel Prize nomination in 2023. He retired from Stanford in 2024 at age 44."},
+        {"id": "D", "text": "Stanford University has produced 84 Nobel Prize winners but only 3 Fields Medal winners, including Wright."}
+      ],
+      "question": "How many Fields Medal winners has Stanford produced?",
+      "answer": "3"
+    },
+    {
+      "id": "md_08",
+      "difficulty": "medium",
+      "trap_type": "arithmetic",
+      "fact_cards": [
+        {"id": "A", "text": "The Greenfield Community Center offers three membership tiers: Basic ($25/month), Standard ($45/month), and Premium ($75/month)."},
+        {"id": "B", "text": "As of December 2024, the center has 340 Basic members, 215 Standard members, and 88 Premium members."},
+        {"id": "C", "text": "The center also receives a $5,000 monthly grant from the city government and earns approximately $3,200 per month from event rentals."}
+      ],
+      "question": "What is the Greenfield Community Center's total monthly revenue from memberships alone?",
+      "answer": "24775"
+    },
+    {
+      "id": "md_09",
+      "difficulty": "medium",
+      "trap_type": "negation",
+      "fact_cards": [
+        {"id": "A", "text": "Five candidates ran for mayor of Edgewood in 2024: Alice Park, Robert Kim, Diana Santos, Evan Moore, and Fatima Al-Rashid."},
+        {"id": "B", "text": "Alice Park (32% of votes) won the election. Robert Kim came second with 28%. Diana Santos received 22%."},
+        {"id": "C", "text": "Evan Moore dropped out of the race two weeks before election day, endorsing Alice Park. His name remained on the ballot and received 4% of votes."},
+        {"id": "D", "text": "Fatima Al-Rashid received the remaining votes. All candidates except Robert Kim supported the proposed transit expansion plan."}
+      ],
+      "question": "Which candidate who completed the full race did NOT support the transit expansion plan?",
+      "answer": "Robert Kim"
+    },
+    {
+      "id": "md_10",
+      "difficulty": "medium",
+      "trap_type": "temporal",
+      "fact_cards": [
+        {"id": "A", "text": "BlueSky Airlines began service in 2010 with a fleet of 12 aircraft serving 8 domestic routes from its hub in Denver."},
+        {"id": "B", "text": "In 2015, BlueSky merged with Pacific Air, adding 25 aircraft and 15 international routes. The merged company retained the BlueSky name."},
+        {"id": "C", "text": "By 2020, BlueSky had expanded to 58 aircraft. In 2023, the company sold 10 older aircraft and purchased 15 new fuel-efficient models."},
+        {"id": "D", "text": "As of 2025, BlueSky operates from three hubs: Denver, Seattle, and Los Angeles."}
+      ],
+      "question": "How many aircraft did BlueSky have immediately after the merger with Pacific Air in 2015?",
+      "answer": "37"
+    },
+    {
+      "id": "md_11",
+      "difficulty": "medium",
+      "trap_type": "misleading_detail",
+      "fact_cards": [
+        {"id": "A", "text": "Dr. Maria Gonzalez leads the neuroscience lab at the University of Chicago. Her team includes 4 postdocs, 8 graduate students, and 3 research technicians."},
+        {"id": "B", "text": "The lab published 12 papers in 2024. Dr. Gonzalez was corresponding author on 9 of them. The remaining 3 were led by postdocs."},
+        {"id": "C", "text": "The lab's annual funding totals $2.1 million, with $1.4 million from NIH and $700,000 from a private foundation. Dr. Gonzalez also serves as a consultant for NeuroTech Inc., earning $50,000 annually."},
+        {"id": "D", "text": "NeuroTech Inc. reported total research spending of $45 million in 2024 across all university partnerships."}
+      ],
+      "question": "How much of Dr. Gonzalez's lab funding comes from NIH?",
+      "answer": "$1.4 million"
+    },
+    {
+      "id": "md_12",
+      "difficulty": "hard",
+      "trap_type": "contradiction",
+      "fact_cards": [
+        {"id": "A", "text": "The Riverview Hotel claims on its website to have hosted over 500,000 guests since opening in 1995. It has 120 rooms with an average occupancy rate of 78%."},
+        {"id": "B", "text": "A travel industry report from 2024 analyzed Riverview Hotel's booking data and found an average occupancy rate of 61% over the hotel's 29-year history, with an average stay of 1.8 nights."},
+        {"id": "C", "text": "At 120 rooms and 61% average occupancy, the hotel accommodates approximately 26,718 room-nights per year, or roughly 14,843 guest stays per year (at 1.8 nights average)."},
+        {"id": "D", "text": "Over 29 years at the rate calculated above, the hotel would have hosted approximately 430,447 guests — significantly below the 500,000 claimed."}
+      ],
+      "question": "According to the independent analysis, approximately how many guests has the Riverview Hotel actually hosted since opening?",
+      "answer": "430447"
+    },
+    {
+      "id": "md_13",
+      "difficulty": "hard",
+      "trap_type": "arithmetic",
+      "fact_cards": [
+        {"id": "A", "text": "ClearWater Corp operates three water treatment plants. Plant Alpha processes 2.4 million gallons per day, Plant Beta processes 1.8 million gallons per day, and Plant Gamma processes 3.1 million gallons per day."},
+        {"id": "B", "text": "Due to scheduled maintenance, Plant Alpha operates at 80% capacity during June and July. Plant Beta operates at 60% capacity during August due to equipment upgrades."},
+        {"id": "C", "text": "The city requires a minimum of 6.0 million gallons per day to meet residential demand. Industrial demand adds another 1.2 million gallons per day."},
+        {"id": "D", "text": "During months when total output drops below minimum demand, the city purchases supplemental water from the regional authority at $4.50 per 1,000 gallons."}
+      ],
+      "question": "During June, what is ClearWater Corp's total daily water processing capacity across all three plants?",
+      "answer": "6.82"
+    },
+    {
+      "id": "md_14",
+      "difficulty": "hard",
+      "trap_type": "negation",
+      "fact_cards": [
+        {"id": "A", "text": "The city council voted on four proposals in December 2024: Proposal A (park renovation), Proposal B (bike lane expansion), Proposal C (library funding increase), and Proposal D (parking garage construction)."},
+        {"id": "B", "text": "Council members voted as follows: Smith voted YES on A, B, C and NO on D. Jones voted YES on A, D and NO on B, C. Williams voted YES on B, C, D and NO on A."},
+        {"id": "C", "text": "Patel voted YES on A, C and NO on B, D. Chen voted YES on A, B and NO on C, D. The council requires 3+ YES votes to pass a proposal."},
+        {"id": "D", "text": "All four proposals were considered in a single session. Proposals that pass receive immediate funding allocation."}
+      ],
+      "question": "Which proposals did NOT pass the city council vote?",
+      "answer": "D"
+    },
+    {
+      "id": "md_15",
+      "difficulty": "hard",
+      "trap_type": "temporal",
+      "fact_cards": [
+        {"id": "A", "text": "Dr. Takahashi published her first paper on CRISPR applications in 2016. She published follow-up studies in 2017 and 2019. Her 2019 paper was retracted in 2021 due to data concerns."},
+        {"id": "B", "text": "In 2020, Dr. Takahashi moved from Kyoto University to the Max Planck Institute. She received a €2 million ERC grant in 2022."},
+        {"id": "C", "text": "The retracted 2019 paper had been cited 340 times before retraction. After retraction, Dr. Takahashi published a corrected version in 2022 with updated data that confirmed the original conclusions."},
+        {"id": "D", "text": "As of 2025, Dr. Takahashi has published 28 papers total. Her most-cited work is the corrected 2022 paper with 520 citations."}
+      ],
+      "question": "How many papers did Dr. Takahashi publish while still at Kyoto University (before her 2020 move)?",
+      "answer": "3"
+    },
+    {
+      "id": "md_16",
+      "difficulty": "hard",
+      "trap_type": "arithmetic",
+      "fact_cards": [
+        {"id": "A", "text": "The Eastside Farmers Market has 45 vendor stalls. Each stall pays a base rent of $200 per month. Premium corner stalls (8 total) pay an additional $75 per month surcharge."},
+        {"id": "B", "text": "The market also charges a 3% commission on all vendor sales. In November 2024, total vendor sales across the market were $380,000."},
+        {"id": "C", "text": "Market operating costs are $7,500 per month for staff, $2,200 for utilities, and $1,800 for insurance and maintenance."},
+        {"id": "D", "text": "The market received a one-time city grant of $15,000 in 2024 to upgrade refrigeration units."}
+      ],
+      "question": "What is the market's total monthly revenue from stall rents and sales commissions combined in November 2024?",
+      "answer": "21000"
+    },
+    {
+      "id": "md_17",
+      "difficulty": "hard",
+      "trap_type": "contradiction",
+      "fact_cards": [
+        {"id": "A", "text": "Apex Manufacturing's 2024 annual report states the company reduced carbon emissions by 35% compared to 2020 levels, from 50,000 tons to 32,500 tons per year."},
+        {"id": "B", "text": "An EPA inspection report from December 2024 measured Apex's annual emissions at 41,200 tons, noting that the company's self-reported figures excluded emissions from its newly acquired subsidiary, which produces 8,700 tons annually."},
+        {"id": "C", "text": "Apex acquired the subsidiary in January 2023. The subsidiary's emissions were not included in the company's baseline 2020 figure of 50,000 tons."},
+        {"id": "D", "text": "The EPA report concluded that when including the subsidiary, Apex's total 2024 emissions were 41,200 tons, representing a 17.6% reduction from a corrected 2020 baseline of 50,000 tons."}
+      ],
+      "question": "What is the actual percentage reduction in Apex's emissions according to the EPA, and what was the company's claimed reduction?",
+      "answer": "17.6% actual, 35% claimed"
+    },
+    {
+      "id": "md_18",
+      "difficulty": "hard",
+      "trap_type": "misleading_detail",
+      "fact_cards": [
+        {"id": "A", "text": "Summit Academy has three departments: Science (12 faculty), Humanities (15 faculty), and Engineering (10 faculty). Each department chair receives a $10,000 annual stipend."},
+        {"id": "B", "text": "The average faculty salary at Summit is $95,000. Science faculty average $105,000, Humanities faculty average $82,000, and Engineering faculty average $110,000."},
+        {"id": "C", "text": "The academy's total annual budget is $12 million. Faculty salaries account for 62% of the budget."},
+        {"id": "D", "text": "Summit Academy was ranked #15 nationally in 2024. Its endowment is $45 million, generating approximately $2 million annually."}
+      ],
+      "question": "What is the total annual salary expenditure for the Science department alone?",
+      "answer": "1260000"
+    },
+    {
+      "id": "md_19",
+      "difficulty": "hard",
+      "trap_type": "negation",
+      "fact_cards": [
+        {"id": "A", "text": "A clinical study compared five pain medications: AlphaRel, BetaCure, GammEase, DeltaPain, and EpsiRelief. The study measured pain reduction on a 10-point scale over 4 weeks."},
+        {"id": "B", "text": "Results: AlphaRel reduced pain by 4.2 points, BetaCure by 3.8 points, GammEase by 5.1 points, DeltaPain by 2.9 points, and EpsiRelief by 4.5 points."},
+        {"id": "C", "text": "Side effects were reported as follows: AlphaRel (nausea in 12% of patients), BetaCure (drowsiness 8%), GammEase (nausea 22%, dizziness 15%), DeltaPain (none reported), EpsiRelief (headache 5%)."},
+        {"id": "D", "text": "The study recommended medications with pain reduction above 4.0 points AND side effect rates below 15% as first-line treatments."}
+      ],
+      "question": "Which medications meet the study's criteria for first-line treatment recommendation?",
+      "answer": "AlphaRel and EpsiRelief"
+    },
+    {
+      "id": "md_20",
+      "difficulty": "very_hard",
+      "trap_type": "contradiction",
+      "fact_cards": [
+        {"id": "A", "text": "The town of Cedarville's official census report from 2020 recorded a population of 28,450. The report projected 3% annual growth."},
+        {"id": "B", "text": "However, a university demographic study in 2024 found that Cedarville's actual 2024 population was 27,100. The study attributed the decline to the closure of the main factory in 2021, which employed 1,800 workers."},
+        {"id": "C", "text": "The factory closure led to approximately 2,400 residents (workers and families) leaving Cedarville between 2021 and 2023."},
+        {"id": "D", "text": "Since 2023, new remote workers have been moving to Cedarville, attracted by low housing costs. An estimated 350 new residents arrived in 2024."},
+        {"id": "E", "text": "The 2020 census projection would have predicted a 2024 population of approximately 32,023 (28,450 × 1.03^4). The actual population fell short by 4,923."}
+      ],
+      "question": "What was Cedarville's approximate population at its lowest point, before new remote workers began arriving?",
+      "answer": "26750"
+    },
+    {
+      "id": "md_21",
+      "difficulty": "very_hard",
+      "trap_type": "arithmetic",
+      "fact_cards": [
+        {"id": "A", "text": "Harbor Shipping Co. operates 4 cargo vessels: the Atlas (capacity 5,000 TEU), the Beacon (3,500 TEU), the Corsair (4,200 TEU), and the Defender (2,800 TEU)."},
+        {"id": "B", "text": "In Q4 2024, average utilization rates were: Atlas 92%, Beacon 78%, Corsair 85%, Defender 95%. Each vessel makes one round trip per month."},
+        {"id": "C", "text": "Revenue per TEU shipped is $1,200 for Pacific routes (Atlas, Corsair) and $950 for Atlantic routes (Beacon, Defender)."},
+        {"id": "D", "text": "Monthly operating costs per vessel: Atlas $3.2M, Beacon $2.1M, Corsair $2.8M, Defender $1.9M."},
+        {"id": "E", "text": "The company is considering retiring either the Beacon or the Defender and reassigning its routes to the remaining fleet."}
+      ],
+      "question": "What is Harbor Shipping's total monthly revenue across all four vessels in Q4 2024?",
+      "answer": "13633000"
+    },
+    {
+      "id": "md_22",
+      "difficulty": "very_hard",
+      "trap_type": "temporal",
+      "fact_cards": [
+        {"id": "A", "text": "GreenTech Solar installed panels on 1,200 homes in 2022. Each installation had a 25-year warranty and generated an average of 8,500 kWh per year."},
+        {"id": "B", "text": "In 2023, the company discovered that panels from supplier BatchX (used in 300 of the 2022 installations) had a defect causing 40% power degradation within 2 years. Unaffected panels degrade at only 0.5% per year."},
+        {"id": "C", "text": "GreenTech replaced all BatchX panels in mid-2024 with new panels from a different supplier. The replacement panels generate 9,200 kWh per year (newer technology)."},
+        {"id": "D", "text": "By the end of 2025, GreenTech had installed panels on a total of 4,500 homes. The company's 2023 and later installations all used the newer panel technology generating 9,200 kWh per year."}
+      ],
+      "question": "How many total kWh per year do the original 2022 installations (including replacements for BatchX) generate as of 2025?",
+      "answer": "10410000"
+    },
+    {
+      "id": "md_23",
+      "difficulty": "very_hard",
+      "trap_type": "misleading_detail",
+      "fact_cards": [
+        {"id": "A", "text": "Riverside Hospital has 400 beds across four units: Emergency (60 beds), Surgery (100 beds), General Medicine (160 beds), and ICU (80 beds). The hospital treats approximately 45,000 patients per year."},
+        {"id": "B", "text": "Average length of stay by unit: Emergency 0.5 days, Surgery 3.2 days, General Medicine 4.5 days, ICU 6.8 days."},
+        {"id": "C", "text": "The hospital's infection rate is 2.1%, which is below the national average of 3.2%. The ICU has the highest unit-specific infection rate at 5.4%."},
+        {"id": "D", "text": "Riverside Hospital was named a Top 100 Hospital in 2024 and received $8 million in federal quality bonuses. It employs 2,200 staff members."},
+        {"id": "E", "text": "Operating costs are $850 per bed per day. The hospital's annual operating budget is $124 million."}
+      ],
+      "question": "What is the daily operating cost for the ICU alone?",
+      "answer": "68000"
+    },
+    {
+      "id": "md_24",
+      "difficulty": "very_hard",
+      "trap_type": "negation",
+      "fact_cards": [
+        {"id": "A", "text": "An investment fund holds positions in 8 tech companies: AlphaNet, ByteForge, CloudNine, DataPulse, EdgeCore, FusionAI, GridScale, and HyperLink. Total portfolio value is $50 million."},
+        {"id": "B", "text": "In Q4 2024, performance by company: AlphaNet +12%, ByteForge -5%, CloudNine +8%, DataPulse +3%, EdgeCore -15%, FusionAI +22%, GridScale +1%, HyperLink -8%."},
+        {"id": "C", "text": "The fund manager decided to divest from all companies with negative Q4 returns AND those with returns below the S&P 500 benchmark of +4%."},
+        {"id": "D", "text": "Position sizes: AlphaNet $8M, ByteForge $6M, CloudNine $7M, DataPulse $5M, EdgeCore $4M, FusionAI $9M, GridScale $3M, HyperLink $8M."},
+        {"id": "E", "text": "The divested funds will be redistributed equally among the retained companies."}
+      ],
+      "question": "Which companies will remain in the portfolio after divestment, and what will be the total value of divested positions?",
+      "answer": "AlphaNet, CloudNine, FusionAI remain; $26M divested"
+    }
+  ]
+}

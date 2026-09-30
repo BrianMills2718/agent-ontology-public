@@ -1,0 +1,377 @@
+name: "Debate Agent"
+version: "1.0"
+description: "A multi-agent debate system with pro/con agents moderated by a judge agent over multiple rounds."
+entry_point: topic_setup
+
+entities:
+  - id: user
+    type: human
+    label: "User"
+    role: user
+
+  - id: moderator_agent
+    type: agent
+    label: "Moderator Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Moderator Agent. Given a user-provided topic, you will frame it as a clear proposition and assign pro and con positions to two agents. Output a DebateSetup object with the proposition and assigned positions.
+    input_schema: TopicInput
+    output_schema: DebateSetup
+
+  - id: pro_agent
+    type: agent
+    label: "Pro Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Pro Agent arguing in favor of the proposition. You will receive the debate history and your position. Provide your argument or rebuttal for the current round.
+    input_schema: DebateTurnInput
+    output_schema: ArgumentOutput
+
+  - id: con_agent
+    type: agent
+    label: "Con Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Con Agent arguing against the proposition. You will receive the debate history and your position. Provide your argument or rebuttal for the current round.
+    input_schema: DebateTurnInput
+    output_schema: ArgumentOutput
+
+  - id: judge_agent
+    type: agent
+    label: "Judge Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are the Judge Agent. After the debate rounds, evaluate the strength of arguments (1-10 per side), quality of rebuttals, determine the overall winner, and summarize key points from each side. If the combined score is less than 12, request one more round.
+    input_schema: DebateHistoryInput
+    output_schema: JudgmentOutput
+
+  - id: debate_history_store
+    type: store
+    label: "Debate History"
+    store_type: queue
+    schema: DebateTurn
+    retention: session
+
+processes:
+  - id: topic_setup
+    type: step
+    label: "Topic Setup"
+    description: "User provides a topic; moderator frames proposition and assigns positions"
+    data_out: DebateSetup
+    logic: |
+      # Expect state.data['topic'] from user input
+      if "topic" not in state.data or not state.data["topic"]:
+          print("    Waiting for user to provide a debate topic.")
+          return state
+      print(f"    Received topic: {state.data['topic']}")
+
+  - id: moderate_topic
+    type: step
+    label: "Moderate Topic"
+    description: "Invoke moderator agent to frame proposition and assign positions"
+
+  - id: initialize_debate
+    type: step
+    label: "Initialize Debate"
+    description: "Initialize debate state, set round count to 1, clear history"
+    data_in: DebateSetup
+    logic: |
+      state.data["round"] = 1
+      state.data["max_rounds"] = 3
+      state.data["debate_history"] = []
+      state.data["pro_position"] = state.data.get("pro_position", "Pro")
+      state.data["con_position"] = state.data.get("con_position", "Con")
+      print(f"    Debate initialized with proposition: {state.data.get('proposition', '')}")
+
+  - id: pro_argument
+    type: step
+    label: "Pro Agent Argument"
+    description: "Invoke Pro Agent to present argument"
+    logic: |
+      state.data["position"] = state.data.get("pro_position", "Pro")
+
+  - id: con_argument
+    type: step
+    label: "Con Agent Argument"
+    description: "Invoke Con Agent to present argument"
+    logic: |
+      state.data["position"] = state.data.get("con_position", "Con")
+
+  - id: record_pro_argument
+    type: step
+    label: "Record Pro Argument"
+    description: "Append Pro Agent's argument to debate history"
+    data_in: ArgumentOutput
+    logic: |
+      turn = {
+          "round": state.data.get("round", 1),
+          "side": "pro",
+          "argument": state.data.get("argument", ""),
+          "position": state.data.get("pro_position", "Pro"),
+          "timestamp": None
+      }
+      history = state.data.get("debate_history", [])
+      history.append(turn)
+      state.data["debate_history"] = history
+      print(f"    Recorded Pro argument for round {turn['round']}")
+
+  - id: record_con_argument
+    type: step
+    label: "Record Con Argument"
+    description: "Append Con Agent's argument to debate history"
+    data_in: ArgumentOutput
+    logic: |
+      turn = {
+          "round": state.data.get("round", 1),
+          "side": "con",
+          "argument": state.data.get("argument", ""),
+          "position": state.data.get("con_position", "Con"),
+          "timestamp": None
+      }
+      history = state.data.get("debate_history", [])
+      history.append(turn)
+      state.data["debate_history"] = history
+      print(f"    Recorded Con argument for round {turn['round']}")
+
+  - id: check_rounds
+    type: gate
+    label: "Check Rounds"
+    condition: "round > max_rounds"
+    branches:
+      - condition: "round <= max_rounds"
+        target: pro_argument
+      - condition: "round > max_rounds"
+        target: judge_evaluation
+
+  - id: judge_evaluation
+    type: step
+    label: "Judge Evaluation"
+    description: "Invoke Judge Agent to evaluate debate"
+  
+  - id: evaluate_judgment
+    type: step
+    label: "Evaluate Judgment"
+    description: "Check judge scores and decide if another round is needed"
+    data_in: JudgmentOutput
+    logic: |
+      combined_score = state.data.get("pro_score", 0) + state.data.get("con_score", 0)
+      print(f"    Combined judge score: {combined_score}")
+      if combined_score < 12:
+          print("    Debate quality low, adding one more round.")
+          state.data["_continue_debate"] = True
+      else:
+          state.data["_done"] = True
+          state.data["_continue_debate"] = False
+
+  - id: continue_or_end
+    type: gate
+    label: "Continue or End Debate?"
+    condition: "_continue_debate == True"
+    branches:
+      - condition: "continue debate"
+        target: pro_argument
+      - condition: "end debate"
+        target: end_debate
+
+  - id: end_debate
+    type: step
+    label: "End Debate"
+    description: "Finalize debate and output judgment summary"
+    data_in: JudgmentOutput
+    logic: |
+      print("    Debate ended. Final judgment summary:")
+      print(state.data.get("summary", "No summary available."))
+
+  - id: increment_round
+    type: step
+    label: "Increment Round"
+    description: "Increment the debate round counter"
+    logic: |
+      state.data["round"] = state.data.get("round", 1) + 1
+      print(f"    Moving to round {state.data['round']}")
+
+edges:
+  # User provides topic to topic_setup
+  - type: flow
+    from: user
+    to: topic_setup
+    label: "User provides topic"
+    data: TopicInput
+
+  # topic_setup flows to moderate_topic
+  - type: flow
+    from: topic_setup
+    to: moderate_topic
+    label: "Prepare moderation"
+
+  # moderate_topic invokes moderator_agent
+  - type: invoke
+    from: moderate_topic
+    to: moderator_agent
+    label: "Frame proposition and assign positions"
+    input: TopicInput
+    output: DebateSetup
+
+  # moderator_agent flows to initialize_debate
+  - type: flow
+    from: moderator_agent
+    to: initialize_debate
+    label: "Debate setup"
+
+  # initialize_debate flows to check_rounds (start debate rounds)
+  - type: flow
+    from: initialize_debate
+    to: check_rounds
+    label: "Start rounds"
+
+  # check_rounds branches to pro_argument or judge_evaluation
+  - type: branch
+    from: check_rounds
+    to: pro_argument
+    condition: "round <= max_rounds"
+  - type: branch
+    from: check_rounds
+    to: judge_evaluation
+    condition: "round > max_rounds"
+
+  # pro_argument invokes pro_agent
+  - type: invoke
+    from: pro_argument
+    to: pro_agent
+    label: "Pro presents argument"
+    input: DebateTurnInput
+    output: ArgumentOutput
+
+  # pro_agent flows to record_pro_argument
+  - type: flow
+    from: pro_argument
+    to: record_pro_argument
+    label: "Record Pro argument"
+
+  # record_pro_argument flows to con_argument
+  - type: flow
+    from: record_pro_argument
+    to: con_argument
+    label: "Next: Con argument"
+
+  # con_argument invokes con_agent
+  - type: invoke
+    from: con_argument
+    to: con_agent
+    label: "Con presents argument"
+    input: DebateTurnInput
+    output: ArgumentOutput
+
+  # con_agent flows to record_con_argument
+  - type: flow
+    from: con_argument
+    to: record_con_argument
+    label: "Record Con argument"
+
+  # record_con_argument flows to increment_round
+  - type: flow
+    from: record_con_argument
+    to: increment_round
+    label: "Increment round"
+
+  # Write completed round to debate history store
+  - type: write
+    from: record_con_argument
+    to: debate_history_store
+    label: "Persist debate round"
+    data: DebateTurn
+
+  # Read debate history from store for judge
+  - type: read
+    from: judge_evaluation
+    to: debate_history_store
+    label: "Read full debate history"
+
+  # increment_round flows to check_rounds
+  - type: flow
+    from: increment_round
+    to: check_rounds
+    label: "Check rounds"
+
+  # judge_evaluation invokes judge_agent
+  - type: invoke
+    from: judge_evaluation
+    to: judge_agent
+    label: "Judge evaluates debate"
+    input: DebateHistoryInput
+    output: JudgmentOutput
+
+  # judge_agent flows to evaluate_judgment
+  - type: flow
+    from: judge_evaluation
+    to: evaluate_judgment
+    label: "Evaluate judgment"
+
+  # evaluate_judgment flows to continue_or_end
+  - type: flow
+    from: evaluate_judgment
+    to: continue_or_end
+    label: "Decide next step"
+
+  # continue_or_end branches to pro_argument or end_debate
+  - type: branch
+    from: continue_or_end
+    to: pro_argument
+    condition: "_continue_debate == True"
+  - type: branch
+    from: continue_or_end
+    to: end_debate
+    condition: "_continue_debate == False"
+
+schemas:
+  - name: TopicInput
+    description: "User-provided debate topic"
+    fields:
+      - { name: topic, type: string }
+
+  - name: DebateSetup
+    description: "Moderator's framing of proposition and assigned positions"
+    fields:
+      - { name: proposition, type: string }
+      - { name: pro_position, type: string }
+      - { name: con_position, type: string }
+
+  - name: DebateTurn
+    description: "A single turn in the debate history"
+    fields:
+      - { name: round, type: integer }
+      - { name: side, type: "enum[pro, con]" }
+      - { name: argument, type: string }
+      - { name: position, type: string }
+      - { name: timestamp, type: string }
+
+  - name: DebateTurnInput
+    description: "Input to pro/con agents containing debate history, position, and proposition"
+    fields:
+      - { name: proposition, type: string }
+      - { name: debate_history, type: "list<DebateTurn>" }
+      - { name: position, type: string }
+      - { name: round, type: integer }
+
+  - name: ArgumentOutput
+    description: "Agent's argument or rebuttal output"
+    fields:
+      - { name: argument, type: string }
+
+  - name: DebateHistoryInput
+    description: "Input to judge agent with full debate history"
+    fields:
+      - { name: debate_history, type: "list<DebateTurn>" }
+      - { name: proposition, type: string }
+      - { name: pro_position, type: string }
+      - { name: con_position, type: string }
+      - { name: rounds_completed, type: integer }
+
+  - name: JudgmentOutput
+    description: "Judge's evaluation of the debate"
+    fields:
+      - { name: pro_score, type: integer }
+      - { name: con_score, type: integer }
+      - { name: rebuttal_quality, type: integer }
+      - { name: winner, type: "enum[pro, con, tie]" }
+      - { name: summary, type: string }

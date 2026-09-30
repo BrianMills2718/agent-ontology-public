@@ -1,0 +1,13 @@
+version: 1
+
+couplings:
+  - description: Live viewer runtime and UI behavior must be reflected in primary docs.
+    sources:
+      - "spec-viewer.html"
+      - "agent_ontology/live_viewer_server.py"
+      - "tests/test_spec_viewer_live_contract.py"
+      - "tests/test_live_viewer_server.py"
+    docs:
+      - "README.md"
+      - "STABILIZATION_REVIEW.md"
+    soft: false

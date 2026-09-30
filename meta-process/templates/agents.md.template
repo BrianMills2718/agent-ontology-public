@@ -1,0 +1,45 @@
+# {title}
+
+<!-- GENERATED FILE: DO NOT EDIT DIRECTLY -->
+<!-- generated_by: {generator_relpath} -->
+<!-- canonical_claude: {claude_relpath} -->
+<!-- canonical_relationships: {relationships_relpath} -->
+<!-- canonical_relationships_sha256: {relationships_sha256} -->
+<!-- sync_check: python {sync_checker_relpath} --check -->
+
+This file is a generated Codex-oriented projection of repo governance.
+Edit the canonical sources instead of editing this file directly.
+
+Canonical governance sources:
+- `{claude_relpath}` — human-readable project rules, workflow, and references
+- `{relationships_relpath}` — machine-readable ADR, coupling, and required-reading graph
+
+## Purpose
+
+{overview}
+
+## Commands
+
+{commands}
+
+## Operating Rules
+
+This projection keeps the highest-signal rules in always-on Codex context.
+For full project structure, detailed terminology, and any rule omitted here,
+read `{claude_relpath}` directly.
+
+### Principles
+
+{principles}
+
+### Workflow
+
+{workflow}
+
+## Machine-Readable Governance
+
+{machine_governance_note}
+
+## References
+
+{references}

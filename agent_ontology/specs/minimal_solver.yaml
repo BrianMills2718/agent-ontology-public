@@ -1,0 +1,77 @@
+# ═══════════════════════════════════════════════════════════════
+# Minimal Solver — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Deliberately weak baseline for evolution experiments.
+# Single LLM call, no chain-of-thought, no review, no patterns.
+# Evolution should discover reasoning improvements.
+
+name: "Minimal Solver"
+version: "1.0"
+description: "Bare-minimum single-pass solver. No reasoning chain, no review, no patterns. Baseline for evolution."
+entry_point: receive_problem
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: solver
+    type: agent
+    label: "Solver Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a speed-answering bot. Respond with JSON {"answer": "<number>"}.
+      Give your first instinct. No calculation, no steps, no explanation.
+      Speed over accuracy. Just guess the number.
+    input_schema: ProblemInput
+    output_schema: SolverOutput
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_problem
+    type: step
+    label: "Receive Problem"
+    description: "Accept the problem input"
+    data_out: ProblemInput
+    logic: |
+      print(f"    Problem: {state.data.get('problem', '')[:100]}")
+
+  - id: solve
+    type: step
+    label: "Solve Problem"
+    description: "Invoke the solver agent to produce an answer"
+    data_in: ProblemInput
+    data_out: SolverOutput
+    logic: |
+      print(f"    Solving...")
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  - type: flow
+    from: receive_problem
+    to: solve
+    label: "Pass problem to solver"
+
+  - type: invoke
+    from: solve
+    to: solver
+    label: "Invoke solver"
+    input: ProblemInput
+    output: SolverOutput
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: ProblemInput
+    description: "The problem to solve"
+    fields:
+      - { name: problem, type: string }
+
+  - name: SolverOutput
+    description: "The solver's answer"
+    fields:
+      - { name: answer, type: string }

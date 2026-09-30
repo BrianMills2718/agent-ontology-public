@@ -1,0 +1,64 @@
+{
+  "name": "Meta-Improve",
+  "description": "Meta-evolution benchmark. Each example is an improvement task: given a target agent spec, failure data, and benchmark description, produce an improved spec. Scoring runs a nested benchmark evaluation — the mutator's output spec is validated, instantiated, and evaluated on the target benchmark.",
+  "source": "Custom benchmark (Agent Ontology project, 2026)",
+  "scoring": ["em"],
+  "design_notes": "5 improvement tasks across different agent types and benchmarks. Baselines are approximate — actual baseline fitness is computed at evaluation time. EM=1.0 if the mutated spec improves over baseline, 0.0 otherwise. Cost: ~20 LLM calls per task for nested evaluation.",
+  "examples": [
+    {
+      "id": "mi_01",
+      "question": "Improve the KB ReAct agent for the kb_tool benchmark. The agent struggles with aggregation questions requiring 3-4 chained tool calls.",
+      "answer": "161.4",
+      "target_spec": "kb_react",
+      "target_benchmark": "kb_tool",
+      "sub_examples": 5,
+      "baseline_fitness": 161.4,
+      "failure_summary": "Q:kb_11 expected=885 got=720; Q:kb_12 expected=2350000 got=no answer; Q:kb_13 expected=Zurich got=Portland. Aggregation questions fail because agent doesn't chain enough lookups before calculating.",
+      "benchmark_description": "Multi-tool reasoning over a fictional knowledge base. Questions require 2-4 chained tool calls (search, lookup, calculate). All entities are fictional."
+    },
+    {
+      "id": "mi_02",
+      "question": "Improve the Minimal Solver agent for the gsm8k_tricky benchmark. The agent guesses instead of reasoning through trick questions.",
+      "answer": "200.8",
+      "target_spec": "minimal_solver",
+      "target_benchmark": "gsm8k_tricky",
+      "sub_examples": 5,
+      "baseline_fitness": 200.8,
+      "failure_summary": "Q:gsm_t1 expected=5 got=10 (bat-and-ball trap); Agent outputs first instinct without checking. Prompt says 'just guess' which prevents careful reasoning.",
+      "benchmark_description": "Math/logic problems with common-error traps (bat-and-ball, lily pad doubling, etc). Intuitive first-reaction answers are wrong. Answer is always a single number."
+    },
+    {
+      "id": "mi_03",
+      "question": "Improve the ReAct agent for the hotpotqa benchmark. The agent sometimes fails on multi-hop questions requiring information from two different sources.",
+      "answer": "120.0",
+      "target_spec": "react",
+      "target_benchmark": "hotpotqa",
+      "sub_examples": 5,
+      "baseline_fitness": 120.0,
+      "failure_summary": "Q:hp_3 expected=David Chanoff got=no relevant result; Q:hp_5 expected=yes got=no. Agent searches once then answers without verifying from second source. Multi-hop questions need explicit second search.",
+      "benchmark_description": "Multi-hop question answering requiring information from multiple sources. Answers are short text spans. Scored by exact match and F1."
+    },
+    {
+      "id": "mi_04",
+      "question": "Improve the Self Refine agent for the gsm8k benchmark. The agent produces verbose text output instead of clean numeric answers.",
+      "answer": "150.0",
+      "target_spec": "self_refine",
+      "target_benchmark": "gsm8k",
+      "sub_examples": 5,
+      "baseline_fitness": 150.0,
+      "failure_summary": "Q:gsm_1 expected=15 got='The answer is approximately 15 dollars'; Q:gsm_3 expected=72 got='After calculating, we get 72 items total'. Numeric extraction fails because answer is buried in prose.",
+      "benchmark_description": "Grade school math problems requiring multi-step arithmetic reasoning. Answer is always a single number. Scored by extracting the final number from output."
+    },
+    {
+      "id": "mi_05",
+      "question": "Improve the MultiDoc Baseline agent for the multidoc benchmark. The agent fails on questions with contradictions between sources and arithmetic aggregation.",
+      "answer": "110.0",
+      "target_spec": "multidoc_baseline",
+      "target_benchmark": "multidoc",
+      "sub_examples": 5,
+      "baseline_fitness": 110.0,
+      "failure_summary": "Q:md_8 expected=MIT got=Stanford (contradiction trap: Source A says MIT, Source B says Stanford founded in 2019 — agent picks wrong source); Q:md_15 expected=1200 got=800 (arithmetic: needs to sum across 3 sources).",
+      "benchmark_description": "Multi-document reasoning with traps. Questions require cross-referencing 3-5 fact cards. Trap types: contradictions, misleading details, arithmetic aggregation, negation, temporal reasoning."
+    }
+  ]
+}

@@ -1,0 +1,396 @@
+name: "Socratic Tutoring Agent"
+version: "1.0"
+description: "A tutoring system that guides students through topics using probing questions, adaptive hints, and remediation based on understanding levels."
+entry_point: start_tutoring
+
+entities:
+  - id: curriculum_planner
+    type: agent
+    label: "Curriculum Planner"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are an expert educational designer. Given a topic and learning objectives, create a structured lesson plan.
+      Break the topic into a sequence of concepts. For each concept, specify prerequisite concepts and suggested question types.
+      Output a LessonPlanOutput.
+    input_schema: TutoringInput
+    output_schema: LessonPlanOutput
+
+  - id: question_generator
+    type: agent
+    label: "Question Generator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a Socratic tutor. Your goal is to ask probing questions that lead the student to discover answers themselves.
+      Receive the current concept, student history, and attempt count.
+      Generate a question, expected key points, and a list of 3 increasingly specific hints.
+      Output a TutorQuestionOutput.
+    input_schema: QuestionGeneratorInput
+    output_schema: TutorQuestionOutput
+
+  - id: evaluator
+    type: agent
+    label: "Response Evaluator"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      Compare the student's response against the expected key points. 
+      Provide a correctness score (0.0 to 1.0), identify misconceptions, and provide feedback that encourages further thought without giving away the answer.
+      Output an EvaluationOutput.
+    input_schema: EvaluationInput
+    output_schema: EvaluationOutput
+
+  - id: remediation_agent
+    type: agent
+    label: "Remediation Specialist"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      The student is struggling significantly with a concept. Provide a simpler explanation or a review of prerequisites to bridge the gap.
+      Do not solve the original question, but prepare them to try again.
+      Output a RemediationOutput.
+    input_schema: EvaluationOutput
+    output_schema: RemediationOutput
+
+  - id: summary_agent
+    type: agent
+    label: "Session Summarizer"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      Analyze the full tutoring transcript and progress. Summarize mastered concepts, areas for review, and overall progress.
+      Output a SessionSummaryOutput.
+    input_schema: SummaryInput
+    output_schema: SessionSummaryOutput
+
+  - id: student
+    type: human
+    label: "Student"
+    role: user
+
+  - id: session_store
+    type: store
+    label: "Session Store"
+    store_type: kv
+    schema: SessionState
+    retention: session
+
+processes:
+  - id: start_tutoring
+    type: step
+    label: "Initialize Session"
+    description: "Accept tutoring parameters and initialize state"
+    data_in: TutoringInput
+    logic: |
+      state.data["transcript"] = []
+      state.data["current_concept_index"] = 0
+      state.data["attempt_count"] = 0
+      state.data["mastered_concepts"] = []
+      state.data["needs_review"] = []
+
+  - id: plan_curriculum
+    type: step
+    label: "Plan Curriculum"
+    description: "Invoke planner to create the lesson sequence"
+    data_in: TutoringInput
+    data_out: LessonPlanOutput
+
+  - id: generate_question
+    type: step
+    label: "Generate Question"
+    description: "Prepare context for the question generator"
+    data_in: QuestionGeneratorInput
+    data_out: TutorQuestionOutput
+    logic: |
+      # Retrieve current concept from the plan
+      plan = state.data.get("lesson_plan_output", {})
+      concepts = plan.get("concepts", [])
+      idx = state.data.get("current_concept_index", 0)
+      
+      if idx < len(concepts):
+          state.data["current_concept"] = concepts[idx]
+      
+      # Prepare input for agent
+      state.data["gen_input"] = {
+          "concept": state.data.get("current_concept"),
+          "history": state.data.get("transcript", []),
+          "attempt_count": state.data.get("attempt_count", 0)
+      }
+
+  - id: get_student_response
+    type: checkpoint
+    label: "Wait for Student"
+    prompt: "Please answer the tutor's question."
+    options: ["Submit Answer", "End Session"]
+
+  - id: evaluate_response
+    type: step
+    label: "Evaluate Response"
+    description: "Prepare student response and key points for evaluation"
+    data_in: EvaluationInput
+    data_out: EvaluationOutput
+    logic: |
+      # Capture response into transcript
+      response_text = state.data.get("answer_text", "")
+      state.data["transcript"].append({"role": "student", "content": response_text})
+      
+      # Prepare evaluation input
+      state.data["eval_input"] = {
+          "student_answer": response_text,
+          "key_points": state.data.get("tutor_question_output", {}).get("expected_key_points", []),
+          "concept": state.data.get("current_concept")
+      }
+
+  - id: check_progress
+    type: gate
+    label: "Check Understanding"
+    condition: "correctness_score"
+    branches:
+      - condition: "correctness_score > 0.8"
+        target: advance_concept
+      - condition: "correctness_score >= 0.4"
+        target: provide_hint
+      - condition: "correctness_score < 0.4"
+        target: remediate
+
+  - id: advance_concept
+    type: step
+    label: "Advance Concept"
+    description: "Mark concept as mastered and move to next"
+    logic: |
+      concept_name = state.data.get("current_concept", {}).get("concept_name", "Unknown")
+      state.data["mastered_concepts"].append(concept_name)
+      state.data["current_concept_index"] += 1
+      state.data["attempt_count"] = 0
+      print(f"Concept {concept_name} mastered.")
+
+  - id: provide_hint
+    type: step
+    label: "Provide Hint"
+    description: "Select next hint and increment attempt counter"
+    logic: |
+      state.data["attempt_count"] += 1
+      hints = state.data.get("tutor_question_output", {}).get("hints", [])
+      # Select hint based on attempt count (clamped to list size)
+      hint_idx = min(state.data["attempt_count"] - 1, len(hints) - 1)
+      current_hint = hints[hint_idx] if hints else "Think about the core principle again."
+      
+      state.data["transcript"].append({"role": "tutor", "content": f"Hint: {current_hint}"})
+      
+      # Termination check for loop: if attempts > 3, force advance but mark for review
+      if state.data["attempt_count"] >= 3:
+          state.data["needs_review"].append(state.data.get("current_concept", {}).get("concept_name"))
+          state.data["current_concept_index"] += 1
+          state.data["attempt_count"] = 0
+
+  - id: remediate
+    type: step
+    label: "Remediate"
+    description: "Invoke remediation agent for struggling student"
+    data_in: EvaluationOutput
+    data_out: RemediationOutput
+    logic: |
+      state.data["attempt_count"] += 1
+
+  - id: check_completion
+    type: gate
+    label: "All Concepts Covered?"
+    condition: "current_concept_index >= total_concepts"
+    branches:
+      - condition: "done"
+        target: summarize_session
+      - condition: "more"
+        target: generate_question
+
+  - id: summarize_session
+    type: step
+    label: "Summarize Session"
+    description: "Generate final report"
+    data_in: SummaryInput
+    data_out: SessionSummaryOutput
+    logic: |
+      state.data["summary_input"] = {
+          "mastered": state.data.get("mastered_concepts", []),
+          "review": state.data.get("needs_review", []),
+          "transcript": state.data.get("transcript", [])
+      }
+
+  - id: end_session
+    type: step
+    label: "End Session"
+    logic: |
+      state.data["_done"] = True
+
+edges:
+  - type: flow
+    from: start_tutoring
+    to: plan_curriculum
+
+  - type: invoke
+    from: plan_curriculum
+    to: curriculum_planner
+    input: TutoringInput
+    output: LessonPlanOutput
+
+  - type: flow
+    from: plan_curriculum
+    to: generate_question
+
+  - type: invoke
+    from: generate_question
+    to: question_generator
+    input: QuestionGeneratorInput
+    output: TutorQuestionOutput
+
+  - type: flow
+    from: generate_question
+    to: get_student_response
+
+  - type: flow
+    from: get_student_response
+    to: evaluate_response
+    data: StudentResponse
+
+  - type: invoke
+    from: evaluate_response
+    to: evaluator
+    input: EvaluationInput
+    output: EvaluationOutput
+
+  - type: flow
+    from: evaluate_response
+    to: check_progress
+
+  - type: branch
+    from: check_progress
+    to: advance_concept
+    condition: "correctness_score > 0.8"
+
+  - type: branch
+    from: check_progress
+    to: provide_hint
+    condition: "correctness_score >= 0.4"
+
+  - type: branch
+    from: check_progress
+    to: remediate
+    condition: "correctness_score < 0.4"
+
+  - type: invoke
+    from: remediate
+    to: remediation_agent
+    input: EvaluationOutput
+    output: RemediationOutput
+
+  - type: flow
+    from: remediate
+    to: generate_question
+    label: "Retry after remediation"
+
+  - type: flow
+    from: provide_hint
+    to: generate_question
+    label: "Retry with hint"
+
+  - type: flow
+    from: advance_concept
+    to: check_completion
+
+  - type: branch
+    from: check_completion
+    to: summarize_session
+    condition: "current_concept_index >= total_concepts"
+
+  - type: loop
+    from: check_completion
+    to: generate_question
+    condition: "current_concept_index < total_concepts"
+
+  - type: invoke
+    from: summarize_session
+    to: summary_agent
+    input: SummaryInput
+    output: SessionSummaryOutput
+
+  - type: flow
+    from: summarize_session
+    to: end_session
+
+  - type: write
+    from: evaluate_response
+    to: session_store
+    data: SessionState
+
+schemas:
+  - name: TutoringInput
+    fields:
+      - { name: topic, type: string }
+      - { name: learning_objectives, type: "list<string>" }
+      - { name: difficulty, type: "enum[beginner, intermediate, advanced]" }
+
+  - name: LessonPlanOutput
+    fields:
+      - { name: concepts, type: "list<Concept>" }
+      - { name: total_concepts, type: integer }
+
+  - name: Concept
+    fields:
+      - { name: concept_name, type: string }
+      - { name: prerequisites, type: "list<string>" }
+      - { name: suggested_question_types, type: "list<string>" }
+
+  - name: QuestionGeneratorInput
+    fields:
+      - { name: concept, type: Concept }
+      - { name: history, type: "list<Exchange>" }
+      - { name: attempt_count, type: integer }
+
+  - name: TutorQuestionOutput
+    fields:
+      - { name: question_text, type: string }
+      - { name: expected_key_points, type: "list<string>" }
+      - { name: difficulty_level, type: string }
+      - { name: hints, type: "list<string>" }
+
+  - name: StudentResponse
+    fields:
+      - { name: answer_text, type: string }
+
+  - name: EvaluationInput
+    fields:
+      - { name: student_answer, type: string }
+      - { name: key_points, type: "list<string>" }
+      - { name: concept, type: Concept }
+
+  - name: EvaluationOutput
+    fields:
+      - { name: correctness_score, type: float }
+      - { name: misconceptions, type: "list<string>" }
+      - { name: mastered_concepts, type: "list<string>" }
+      - { name: feedback_text, type: string }
+
+  - name: RemediationOutput
+    fields:
+      - { name: explanation, type: string }
+      - { name: prerequisite_review, type: string }
+
+  - name: SummaryInput
+    fields:
+      - { name: mastered, type: "list<string>" }
+      - { name: review, type: "list<string>" }
+      - { name: transcript, type: "list<Exchange>" }
+
+  - name: SessionSummaryOutput
+    fields:
+      - { name: concepts_mastered, type: "list<string>" }
+      - { name: concepts_needing_review, type: "list<string>" }
+      - { name: progress_percentage, type: float }
+      - { name: recommended_next_topics, type: "list<string>" }
+      - { name: full_transcript, type: "list<Exchange>" }
+
+  - name: Exchange
+    fields:
+      - { name: role, type: string }
+      - { name: content, type: string }
+
+  - name: SessionState
+    fields:
+      - { name: transcript, type: "list<Exchange>" }
+      - { name: current_concept_index, type: integer }
+      - { name: mastered_concepts, type: "list<string>" }

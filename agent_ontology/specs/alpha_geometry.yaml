@@ -1,0 +1,142 @@
+name: "AlphaGeometry-style Agent"
+version: "1.0"
+description: >
+  Neural-symbolic geometry solver inspired by AlphaGeometry (Trinh et al. 2024).
+  LLM proposes construction steps; symbolic deduction engine checks validity
+  and derives consequences. The loop continues until goal is proved or
+  max iterations reached.
+entry_point: receive_problem
+
+entities:
+  - id: construction_proposer
+    type: agent
+    label: "Construction Proposer (LLM)"
+    model: "gemini-3-flash-preview"
+    system_prompt: >
+      You are a geometry construction proposer. Given a geometry problem and
+      the current known facts (derived by symbolic deduction), propose a single
+      auxiliary construction (e.g., "construct midpoint M of segment AB" or
+      "draw line through P parallel to AB").
+      Output JSON: {"construction": "description", "formal": "formal notation"}
+    input_schema: ConstructionInput
+    output_schema: ConstructionOutput
+
+  - id: fact_store
+    type: store
+    label: "Derived Facts"
+    store_type: logic_program
+    formalism: horn_clauses
+
+schemas:
+  - name: ConstructionInput
+    fields:
+      - { name: problem, type: string }
+      - { name: known_facts, type: "list<string>" }
+      - { name: goal, type: string }
+  - name: ConstructionOutput
+    fields:
+      - { name: construction, type: string }
+      - { name: formal, type: string }
+  - name: DeductionResult
+    fields:
+      - { name: new_facts, type: "list<string>" }
+      - { name: goal_proved, type: boolean }
+
+processes:
+  - id: receive_problem
+    type: step
+    label: "Receive Geometry Problem"
+    logic: |
+      state.data["problem"] = state.data.get("problem", state.data.get("query", ""))
+      state.data["goal"] = state.data.get("goal", "Prove triangle ABC is isosceles")
+      state.data["known_facts"] = state.data.get("known_facts", ["AB = AC", "angle BAC = 60"])
+      state.data["iteration"] = 0
+      state.data["max_iterations"] = state.data.get("max_iterations", 5)
+      state.data["proof_steps"] = []
+
+  - id: propose_construction
+    type: step
+    label: "Propose Construction"
+
+  - id: translate_to_formal
+    type: formal_translation
+    label: "Construction → Formal Rules"
+    source_formalism: natural_language
+    target_formalism: horn_clauses
+    translator: llm
+    validation: true
+
+  - id: run_deduction
+    type: symbolic_inference
+    label: "Symbolic Deduction Engine"
+    engine: prolog
+    formalism: horn_clauses
+    timeout: "10s"
+    fallback: handle_timeout
+    data_out: DeductionResult
+
+  - id: check_proved
+    type: gate
+    label: "Goal Proved?"
+    condition: "goal_proved"
+    branches:
+      - { condition: "goal_proved is true", target: emit_proof }
+      - { condition: "goal_proved is false", target: check_iterations }
+
+  - id: check_iterations
+    type: gate
+    label: "Iterations Remaining?"
+    condition: "iteration < max_iterations"
+    branches:
+      - { condition: "iteration < max_iterations", target: propose_construction }
+      - { condition: "iteration >= max_iterations", target: emit_failure }
+
+  - id: update_facts
+    type: step
+    label: "Update Known Facts"
+    logic: |
+      new_facts = state.data.get("new_facts", [])
+      state.data["known_facts"] = state.data.get("known_facts", []) + new_facts
+      state.data["iteration"] = state.data.get("iteration", 0) + 1
+      construction = state.data.get("construction", "")
+      if construction:
+          state.data["proof_steps"] = state.data.get("proof_steps", []) + [construction]
+
+  - id: emit_proof
+    type: step
+    label: "Emit Proof"
+    logic: |
+      state.data["proved"] = True
+      state.data["answer"] = "Proof found: " + "; ".join(state.data.get("proof_steps", []))
+      state.data["_done"] = True
+
+  - id: emit_failure
+    type: step
+    label: "Emit Failure"
+    logic: |
+      state.data["proved"] = False
+      state.data["answer"] = "Could not prove within iteration limit."
+      state.data["_done"] = True
+
+  - id: handle_timeout
+    type: step
+    label: "Handle Deduction Timeout"
+    logic: |
+      state.data["new_facts"] = []
+      state.data["goal_proved"] = False
+
+edges:
+  - { type: flow, from: receive_problem, to: propose_construction }
+  - { type: invoke, from: propose_construction, to: construction_proposer, input: ConstructionInput, output: ConstructionOutput }
+  - { type: flow, from: propose_construction, to: translate_to_formal }
+  - { type: flow, from: translate_to_formal, to: run_deduction }
+  - { type: read, from: run_deduction, to: fact_store }
+  - { type: write, from: run_deduction, to: fact_store }
+  - { type: flow, from: run_deduction, to: update_facts }
+  - { type: flow, from: update_facts, to: check_proved }
+  - { type: branch, from: check_proved, to: emit_proof, condition: "goal_proved is true" }
+  - { type: branch, from: check_proved, to: check_iterations, condition: "goal_proved is false" }
+  - { type: branch, from: check_iterations, to: propose_construction, condition: "iteration < max_iterations" }
+  - { type: branch, from: check_iterations, to: emit_failure, condition: "iteration >= max_iterations" }
+  - { type: loop, from: check_iterations, to: propose_construction, condition: "iteration < max_iterations", max_iterations: 10 }
+  - { type: flow, from: handle_timeout, to: update_facts }

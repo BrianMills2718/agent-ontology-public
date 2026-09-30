@@ -1,0 +1,137 @@
+name: "PDDL Planning Agent"
+version: "1.0"
+description: >
+  Neural-symbolic planning pipeline: NL task → PDDL formalization →
+  classical planner → NL execution plan. Demonstrates formal_translation
+  and symbolic_inference process types.
+entry_point: receive_task
+
+entities:
+  - id: translator
+    type: agent
+    label: "NL-PDDL Translator"
+    model: "gemini-3-flash-preview"
+    system_prompt: >
+      You translate natural language task descriptions into PDDL problem definitions.
+      Given a domain description and a task, produce a valid PDDL problem file.
+      Output only the PDDL, no explanation.
+    input_schema: TranslationInput
+    output_schema: PDDLOutput
+
+  - id: explainer
+    type: agent
+    label: "Plan Explainer"
+    model: "gemini-3-flash-preview"
+    system_prompt: >
+      You translate formal plans into clear natural language explanations.
+      Given a sequence of PDDL actions, explain each step in plain English.
+    input_schema: PlanInput
+    output_schema: ExplanationOutput
+
+  - id: pddl_store
+    type: store
+    label: "PDDL Domain Store"
+    store_type: pddl_domain
+    formalism: pddl
+    retention: persistent
+
+schemas:
+  - name: TranslationInput
+    fields:
+      - { name: task, type: string }
+      - { name: domain_pddl, type: string }
+  - name: PDDLOutput
+    fields:
+      - { name: problem_pddl, type: string }
+  - name: PlanInput
+    fields:
+      - { name: plan_actions, type: "list<string>" }
+      - { name: original_task, type: string }
+  - name: ExplanationOutput
+    fields:
+      - { name: explanation, type: string }
+      - { name: steps, type: "list<string>" }
+  - name: PlannerResult
+    fields:
+      - { name: plan, type: "list<string>" }
+      - { name: solvable, type: boolean }
+
+processes:
+  - id: receive_task
+    type: step
+    label: "Receive Task"
+    logic: |
+      state.data["task"] = state.data.get("task", "Stack block A on block B")
+      state.data["domain_pddl"] = state.data.get("domain_pddl", "(define (domain blocks) ...)")
+
+  - id: translate_to_pddl
+    type: formal_translation
+    label: "NL → PDDL Translation"
+    source_formalism: natural_language
+    target_formalism: pddl
+    translator: llm
+    data_in: TranslationInput
+    data_out: PDDLOutput
+    validation: true
+
+  - id: invoke_translator
+    type: step
+    label: "Invoke Translator Agent"
+
+  - id: run_planner
+    type: symbolic_inference
+    label: "Run PDDL Planner"
+    engine: fast_downward
+    formalism: pddl
+    timeout: "30s"
+    fallback: handle_unsolvable
+    data_in: PDDLOutput
+    data_out: PlannerResult
+
+  - id: check_solvable
+    type: gate
+    label: "Plan Found?"
+    condition: "solvable"
+    branches:
+      - { condition: "solvable is true", target: translate_to_nl }
+      - { condition: "solvable is false", target: handle_unsolvable }
+
+  - id: translate_to_nl
+    type: formal_translation
+    label: "Plan → NL Explanation"
+    source_formalism: pddl
+    target_formalism: natural_language
+    translator: llm
+    data_in: PlanInput
+    data_out: ExplanationOutput
+
+  - id: invoke_explainer
+    type: step
+    label: "Invoke Explainer Agent"
+
+  - id: emit_result
+    type: step
+    label: "Emit Result"
+    logic: |
+      state.data["_done"] = True
+
+  - id: handle_unsolvable
+    type: step
+    label: "Handle Unsolvable"
+    logic: |
+      state.data["explanation"] = "The planner could not find a solution for this task."
+      state.data["_done"] = True
+
+edges:
+  - { type: flow, from: receive_task, to: translate_to_pddl }
+  - { type: flow, from: translate_to_pddl, to: invoke_translator }
+  - { type: invoke, from: invoke_translator, to: translator, input: TranslationInput, output: PDDLOutput }
+  - { type: write, from: invoke_translator, to: pddl_store }
+  - { type: flow, from: invoke_translator, to: run_planner }
+  - { type: read, from: run_planner, to: pddl_store }
+  - { type: flow, from: run_planner, to: check_solvable }
+  - { type: branch, from: check_solvable, to: translate_to_nl, condition: "solvable is true" }
+  - { type: branch, from: check_solvable, to: handle_unsolvable, condition: "solvable is false" }
+  - { type: flow, from: translate_to_nl, to: invoke_explainer }
+  - { type: invoke, from: invoke_explainer, to: explainer, input: PlanInput, output: ExplanationOutput }
+  - { type: flow, from: invoke_explainer, to: emit_result }

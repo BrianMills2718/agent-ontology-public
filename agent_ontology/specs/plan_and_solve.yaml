@@ -1,0 +1,344 @@
+# ═══════════════════════════════════════════════════════════════
+# Plan-and-Solve Agent — Agent Spec (Agent Ontology v0.2)
+# ═══════════════════════════════════════════════════════════════
+# Implements the Plan-and-Solve reasoning pattern.
+# A planner decomposes a complex problem into sub-problems,
+# a solver tackles each sequentially, a verifier checks each
+# solution (with retry logic), and a synthesizer combines all
+# sub-solutions into a final answer.
+
+name: "Plan and Solve"
+version: "1.0"
+description: "Plan-and-Solve agent that decomposes a problem into sub-problems, solves each with verification and retry logic, then synthesizes a final answer."
+entry_point: receive_problem
+
+# ── Entities ─────────────────────────────────────────────────
+
+entities:
+
+  - id: planner
+    type: agent
+    label: "Planner Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a planning agent. Given a complex problem, decompose it into a numbered list of
+      smaller, sequential sub-problems. Each sub-problem should be self-contained enough to solve
+      independently, but they should be ordered so later sub-problems can build on earlier solutions.
+      Output JSON with "sub_problems": a list of objects, each with "index" (integer starting at 1),
+      "description" (string), and "depends_on" (list of indices this sub-problem depends on, or empty).
+    input_schema: PlannerInput
+    output_schema: Decomposition
+
+  - id: solver
+    type: agent
+    label: "Solver Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a problem-solving agent. Given a sub-problem description, the original problem for context,
+      and any previously solved sub-problem solutions, produce a solution. Output JSON with
+      "solution_text" (string with your solution) and "confidence" (integer 1-10).
+    input_schema: SolverInput
+    output_schema: SubSolution
+
+  - id: verifier
+    type: agent
+    label: "Verifier Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a verification agent. Given a sub-problem, its proposed solution, and the original problem,
+      check whether the solution is correct, complete, and consistent. Output JSON with "is_valid"
+      (boolean), "issues" (list of strings describing any problems found), and "suggestions" (list of
+      strings with improvement suggestions).
+    input_schema: VerifierInput
+    output_schema: VerificationResult
+
+  - id: synthesizer
+    type: agent
+    label: "Synthesizer Agent"
+    model: gemini-3-flash-preview
+    system_prompt: |
+      You are a synthesis agent. Given the original problem and all verified sub-solutions,
+      combine them into a single coherent final answer. Ensure consistency across sub-solutions
+      and present a unified response. Output JSON with "final_answer" (string) and
+      "synthesis_notes" (string describing how sub-solutions were combined).
+    input_schema: SynthesizerInput
+    output_schema: SynthesizedAnswer
+
+# ── Processes ────────────────────────────────────────────────
+
+processes:
+
+  - id: receive_problem
+    type: step
+    label: "Receive Problem"
+    description: "Accept the complex problem and initialize state"
+    data_out: PlannerInput
+    logic: |
+      state.data["solved_sub_solutions"] = []
+      state.data["current_sub_index"] = 0
+      state.data["retry_count"] = 0
+      state.data["max_retries"] = 2
+      print(f"    Problem: {state.data.get('problem', '')[:100]}")
+
+  - id: decompose
+    type: step
+    label: "Decompose Problem"
+    description: "Invoke the planner agent to break the problem into sub-problems"
+    data_in: PlannerInput
+    data_out: Decomposition
+    logic: |
+      print(f"    Decomposing problem into sub-problems...")
+
+  - id: solve_subproblem
+    type: step
+    label: "Solve Sub-problem"
+    description: "Invoke the solver agent on the current sub-problem"
+    data_in: SolverInput
+    data_out: SubSolution
+    logic: |
+      sub_problems = state.data.get("sub_problems", [])
+      idx = state.data.get("current_sub_index", 0)
+      if idx < len(sub_problems):
+          current = sub_problems[idx]
+          state.data["current_sub_description"] = current.get("description", "")
+          print(f"    Solving sub-problem {idx + 1}/{len(sub_problems)}: {current.get('description', '')[:80]}")
+      else:
+          print(f"    No more sub-problems to solve")
+
+  - id: verify_solution
+    type: gate
+    label: "Solution valid?"
+    condition: "is_valid == True"
+    branches:
+      - condition: "valid"
+        target: accept_solution
+      - condition: "invalid"
+        target: retry_or_next
+
+  - id: accept_solution
+    type: step
+    label: "Accept Solution"
+    description: "Record the verified sub-solution and advance to the next sub-problem"
+    logic: |
+      solution = {
+          "index": state.data.get("current_sub_index", 0),
+          "description": state.data.get("current_sub_description", ""),
+          "solution_text": state.data.get("solution_text", ""),
+          "confidence": state.data.get("confidence", 0),
+      }
+      solved = state.data.get("solved_sub_solutions", [])
+      solved.append(solution)
+      state.data["solved_sub_solutions"] = solved
+      state.data["current_sub_index"] = state.data.get("current_sub_index", 0) + 1
+      state.data["retry_count"] = 0
+      print(f"    Accepted solution for sub-problem {solution['index'] + 1}")
+
+  - id: retry_or_next
+    type: gate
+    label: "Retries left?"
+    condition: "retry_count < max_retries"
+    branches:
+      - condition: "retries remaining"
+        target: solve_subproblem
+      - condition: "retries exhausted"
+        target: accept_solution
+
+  - id: check_remaining
+    type: gate
+    label: "More sub-problems?"
+    condition: "current_sub_index < total_sub_problems"
+    branches:
+      - condition: "more sub-problems"
+        target: solve_subproblem
+      - condition: "all solved"
+        target: synthesize
+
+  - id: invoke_verifier
+    type: step
+    label: "Invoke Verifier"
+    description: "Send the current sub-solution to the verifier agent for checking"
+    data_in: VerifierInput
+    data_out: VerificationResult
+    logic: |
+      state.data["retry_count"] = state.data.get("retry_count", 0) + 1
+      print(f"    Verifying sub-problem {state.data.get('current_sub_index', 0) + 1} (attempt {state.data['retry_count']})")
+
+  - id: synthesize
+    type: step
+    label: "Synthesize"
+    description: "Invoke the synthesizer agent to combine all sub-solutions into a final answer"
+    data_in: SynthesizerInput
+    data_out: SynthesizedAnswer
+    logic: |
+      solved = state.data.get("solved_sub_solutions", [])
+      print(f"    Synthesizing {len(solved)} sub-solutions into final answer")
+      # No `_done` here: it is checked right after this logic and returned
+      # before the synthesizer was ever invoked. This step has no outgoing
+      # edge, so the run ends after it anyway.
+
+# ── Edges ────────────────────────────────────────────────────
+
+edges:
+
+  # Main flow
+  - type: flow
+    from: receive_problem
+    to: decompose
+    label: "Send to planner"
+
+  - type: invoke
+    from: decompose
+    to: planner
+    label: "Decompose into sub-problems"
+    input: PlannerInput
+    output: Decomposition
+
+  - type: flow
+    from: decompose
+    to: solve_subproblem
+    label: "Start solving"
+
+  # Solve -> Verify
+  - type: invoke
+    from: solve_subproblem
+    to: solver
+    label: "Solve current sub-problem"
+    input: SolverInput
+    output: SubSolution
+
+  - type: flow
+    from: solve_subproblem
+    to: invoke_verifier
+    label: "Verify solution"
+
+  - type: invoke
+    from: invoke_verifier
+    to: verifier
+    label: "Check solution"
+    input: VerifierInput
+    output: VerificationResult
+
+  - type: flow
+    from: invoke_verifier
+    to: verify_solution
+    label: "Check verification result"
+
+  # Verification gate branches
+  - type: branch
+    from: verify_solution
+    to: accept_solution
+    condition: "is_valid == True"
+
+  - type: branch
+    from: verify_solution
+    to: retry_or_next
+    condition: "is_valid == False"
+
+  # Retry gate branches
+  - type: branch
+    from: retry_or_next
+    to: solve_subproblem
+    condition: "retry_count < max_retries"
+
+  - type: branch
+    from: retry_or_next
+    to: accept_solution
+    condition: "retry_count >= max_retries"
+
+  # After accepting, check if more sub-problems remain
+  - type: flow
+    from: accept_solution
+    to: check_remaining
+    label: "Check if more sub-problems"
+
+  # Remaining gate branches
+  - type: branch
+    from: check_remaining
+    to: solve_subproblem
+    condition: "current_sub_index < total_sub_problems"
+
+  - type: branch
+    from: check_remaining
+    to: synthesize
+    condition: "current_sub_index >= total_sub_problems"
+
+  # Loop edges
+  - type: loop
+    from: check_remaining
+    to: solve_subproblem
+    label: "Next sub-problem"
+    condition: "current_sub_index < total_sub_problems"
+
+  - type: loop
+    from: retry_or_next
+    to: solve_subproblem
+    label: "Retry solving"
+    condition: "retry_count < max_retries"
+
+  # Synthesis
+  - type: invoke
+    from: synthesize
+    to: synthesizer
+    label: "Combine sub-solutions"
+    input: SynthesizerInput
+    output: SynthesizedAnswer
+
+# ── Schemas ──────────────────────────────────────────────────
+
+schemas:
+
+  - name: PlannerInput
+    description: "Input to the planner agent"
+    fields:
+      - { name: problem, type: string }
+
+  - name: Decomposition
+    description: "Output from the planner: a list of sub-problems"
+    fields:
+      - { name: sub_problems, type: "list<SubProblem>" }
+
+  - name: SubProblem
+    description: "A single sub-problem in the decomposition"
+    fields:
+      - { name: index, type: integer }
+      - { name: description, type: string }
+      - { name: depends_on, type: "list<integer>" }
+
+  - name: SolverInput
+    description: "Input to the solver agent"
+    fields:
+      - { name: problem, type: string }
+      - { name: sub_description, type: string }
+      - { name: prior_solutions, type: "list<SubSolution>" }
+
+  - name: SubSolution
+    description: "A solution to a single sub-problem"
+    fields:
+      - { name: solution_text, type: string }
+      - { name: confidence, type: integer }
+
+  - name: VerifierInput
+    description: "Input to the verifier agent"
+    fields:
+      - { name: problem, type: string }
+      - { name: sub_description, type: string }
+      - { name: solution_text, type: string }
+
+  - name: VerificationResult
+    description: "Output from the verifier"
+    fields:
+      - { name: is_valid, type: boolean }
+      - { name: issues, type: "list<string>" }
+      - { name: improvement_suggestions, type: "list<string>" }
+
+  - name: SynthesizerInput
+    description: "Input to the synthesizer agent"
+    fields:
+      - { name: problem, type: string }
+      - { name: solved_sub_solutions, type: "list<SubSolution>" }
+
+  - name: SynthesizedAnswer
+    description: "Final combined answer from the synthesizer"
+    fields:
+      - { name: final_answer, type: string }
+      - { name: synthesis_notes, type: string }

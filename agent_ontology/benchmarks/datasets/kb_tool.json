@@ -1,0 +1,209 @@
+{
+  "name": "KB Tool",
+  "description": "Multi-tool reasoning over a fictional knowledge base. 25 questions requiring 2-4 chained tool calls (search, lookup, calculate). Designed so a single LLM call cannot answer (fictional entities not in training data). Different architectures lead to measurably different performance.",
+  "source": "Custom benchmark (Agent Ontology project, 2026)",
+  "scoring": ["em", "f1"],
+  "design_notes": "5 question types x 5 each: chain lookup (2 calls), multi-hop (3 calls), aggregation (3-4 calls), comparison (3 calls), temporal (3 calls). All entities are fictional so LLM knowledge alone gives 0%. Tools must be chained: output of search feeds input to lookup, etc.",
+  "examples": [
+    {
+      "id": "kb_01",
+      "question": "What city is the headquarters of the company that manufactures the NeuroSync Headset?",
+      "answer": "Portland",
+      "difficulty": "easy",
+      "min_tool_calls": 2,
+      "type": "chain_lookup"
+    },
+    {
+      "id": "kb_02",
+      "question": "What city is the headquarters of the company that manufactures the SunLink Base Station?",
+      "answer": "Nairobi",
+      "difficulty": "easy",
+      "min_tool_calls": 2,
+      "type": "chain_lookup"
+    },
+    {
+      "id": "kb_03",
+      "question": "Who founded the company that makes the Sentinel Warehouse Robot?",
+      "answer": "Marcus Tanaka",
+      "difficulty": "easy",
+      "min_tool_calls": 2,
+      "type": "chain_lookup"
+    },
+    {
+      "id": "kb_04",
+      "question": "What is the name of the company that produces the DeepScanner Sonar Array?",
+      "answer": "Oceanic Data Systems",
+      "difficulty": "easy",
+      "min_tool_calls": 2,
+      "type": "chain_lookup"
+    },
+    {
+      "id": "kb_05",
+      "question": "How many employees work at the company that makes the VoltCell Battery Pack?",
+      "answer": "165",
+      "difficulty": "easy",
+      "min_tool_calls": 2,
+      "type": "chain_lookup"
+    },
+    {
+      "id": "kb_06",
+      "question": "What university did the founder of Helios Quantum attend?",
+      "answer": "Lakeview University",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "multi_hop"
+    },
+    {
+      "id": "kb_07",
+      "question": "In what country is the headquarters of the company founded by the person who won the Atlas Humanitarian Tech Prize and works in mobile technology?",
+      "answer": "Kenya",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "multi_hop"
+    },
+    {
+      "id": "kb_08",
+      "question": "What degree did the founder of Nexus AI Labs earn?",
+      "answer": "PhD Computer Science",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "multi_hop"
+    },
+    {
+      "id": "kb_09",
+      "question": "What is the population of the city where Aether Robotics is headquartered?",
+      "answer": "2753862",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "multi_hop"
+    },
+    {
+      "id": "kb_10",
+      "question": "What organization gives out the award won by the QubitX Processor?",
+      "answer": "Global Tech Foundation",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "multi_hop"
+    },
+    {
+      "id": "kb_11",
+      "question": "What is the total number of employees across all companies headquartered in Portland?",
+      "answer": "885",
+      "difficulty": "medium",
+      "min_tool_calls": 4,
+      "type": "aggregation"
+    },
+    {
+      "id": "kb_12",
+      "question": "What is the combined revenue of all companies headquartered in Osaka?",
+      "answer": "117000000",
+      "difficulty": "medium",
+      "min_tool_calls": 4,
+      "type": "aggregation"
+    },
+    {
+      "id": "kb_13",
+      "question": "How many people in the knowledge base attended Kanto Technical University?",
+      "answer": "4",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "aggregation"
+    },
+    {
+      "id": "kb_14",
+      "question": "What is the total price of all products manufactured by Helios Quantum?",
+      "answer": "1250000",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "aggregation"
+    },
+    {
+      "id": "kb_15",
+      "question": "How many awards have been won by products from Aether Robotics?",
+      "answer": "2",
+      "difficulty": "hard",
+      "min_tool_calls": 4,
+      "type": "aggregation"
+    },
+    {
+      "id": "kb_16",
+      "question": "Which costs more, the NeuroSync Headset or the VoltCell Battery Pack?",
+      "answer": "VoltCell Battery Pack",
+      "difficulty": "easy",
+      "min_tool_calls": 3,
+      "type": "comparison"
+    },
+    {
+      "id": "kb_17",
+      "question": "Which company has more employees, Helios Quantum or Solaris Mobile?",
+      "answer": "Helios Quantum",
+      "difficulty": "easy",
+      "min_tool_calls": 3,
+      "type": "comparison"
+    },
+    {
+      "id": "kb_18",
+      "question": "Which company has higher revenue, Oceanic Data Systems or TerraVolt Energy?",
+      "answer": "TerraVolt Energy",
+      "difficulty": "easy",
+      "min_tool_calls": 3,
+      "type": "comparison"
+    },
+    {
+      "id": "kb_19",
+      "question": "Which product launched more recently, the Sentinel Warehouse Robot or the Atlas Industrial Arm?",
+      "answer": "Atlas Industrial Arm",
+      "difficulty": "easy",
+      "min_tool_calls": 3,
+      "type": "comparison"
+    },
+    {
+      "id": "kb_20",
+      "question": "Which city has a larger population, the headquarters city of Helios Quantum or the headquarters city of Nexus AI Labs?",
+      "answer": "Portland",
+      "difficulty": "hard",
+      "min_tool_calls": 4,
+      "type": "comparison"
+    },
+    {
+      "id": "kb_21",
+      "question": "Was Aether Robotics founded before or after the founder of Helios Quantum received her PhD?",
+      "answer": "before",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "temporal"
+    },
+    {
+      "id": "kb_22",
+      "question": "Was Nexus AI Labs founded before or after the Zenith Prize for Innovation was established?",
+      "answer": "after",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "temporal"
+    },
+    {
+      "id": "kb_23",
+      "question": "Was the SkySeed Agricultural Drone launched before or after Canopy Drones was founded?",
+      "answer": "after",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "temporal"
+    },
+    {
+      "id": "kb_24",
+      "question": "How many years passed between the founding of Lakeview University and the founding of Savannah College of Science?",
+      "answer": "112",
+      "difficulty": "medium",
+      "min_tool_calls": 3,
+      "type": "temporal"
+    },
+    {
+      "id": "kb_25",
+      "question": "Did Marcus Tanaka finish his degree before or after Carlos Rivera finished his?",
+      "answer": "after",
+      "difficulty": "hard",
+      "min_tool_calls": 3,
+      "type": "temporal"
+    }
+  ]
+}

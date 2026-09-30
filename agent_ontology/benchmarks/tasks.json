@@ -1,0 +1,78 @@
+{
+  "tasks": [
+    {
+      "id": "factual_qa",
+      "name": "Factual Question Answering",
+      "description": "Answer a factual question about the Eiffel Tower's completion year",
+      "input": {
+        "query": "In what year was the Eiffel Tower completed?"
+      },
+      "validator": {
+        "type": "contains",
+        "target_field": null,
+        "value": "1889"
+      },
+      "agents": ["react", "rag"]
+    },
+    {
+      "id": "planning",
+      "name": "Multi-Step Planning",
+      "description": "Generate a multi-step plan for organizing a bookshelf",
+      "input": {
+        "objective": "Plan a 3-step process for organizing a bookshelf",
+        "max_tasks": 5,
+        "tasks": [
+          {"id": 1, "description": "Assess current bookshelf state", "status": "pending", "priority": 1}
+        ]
+      },
+      "validator": {
+        "type": "min_steps",
+        "min_count": 3
+      },
+      "agents": ["babyagi", "babyagi_autogen", "autogpt"]
+    },
+    {
+      "id": "code_review",
+      "name": "Security-Aware Code Review",
+      "description": "Review a code diff that introduces a hardcoded password",
+      "input": {
+        "diff": "--- a/app.py\n+++ b/app.py\n@@ -1,3 +1,5 @@\n+import os\n+PASSWORD = \"secret123\"\n def hello():\n     return \"world\"",
+        "files": ["app.py"],
+        "description": "Add password constant"
+      },
+      "validator": {
+        "type": "contains_any",
+        "target_field": null,
+        "values": ["security", "hardcoded", "secret", "credential", "password", "sensitive"]
+      },
+      "agents": ["code_reviewer"]
+    },
+    {
+      "id": "creative_writing",
+      "name": "Creative Writing (Blog Post)",
+      "description": "Write a short blog post about renewable energy",
+      "input": {
+        "objective": "Write a short blog post about renewable energy"
+      },
+      "validator": {
+        "type": "min_length",
+        "min_chars": 100
+      },
+      "agents": ["crew"]
+    },
+    {
+      "id": "debate_topic",
+      "name": "Structured Debate",
+      "description": "Conduct a multi-round debate on a policy topic",
+      "input": {
+        "topic": "Should universities require computer science for all students?"
+      },
+      "validator": {
+        "type": "debate_structure",
+        "require_winner": true,
+        "min_history": 4
+      },
+      "agents": ["debate"]
+    }
+  ]
+}

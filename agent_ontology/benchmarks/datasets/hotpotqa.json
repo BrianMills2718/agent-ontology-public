@@ -1,0 +1,183 @@
+{
+  "name": "HotpotQA",
+  "description": "Multi-hop question answering benchmark (25 curated examples)",
+  "source": "HotpotQA (Yang et al., 2018)",
+  "scoring": ["em", "f1"],
+  "examples": [
+    {
+      "id": "hpqa_01",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "answer": "Yes",
+      "type": "comparison",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_02",
+      "question": "What government position was held by the woman who portrayed Nora combien in the film 'Passage to Marseille'?",
+      "answer": "Chief of Protocol",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_03",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "answer": "Terry Richardson",
+      "type": "comparison",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_04",
+      "question": "The Eiffel Tower was designed by the same engineer who designed what famous structure in New York?",
+      "answer": "Statue of Liberty",
+      "type": "bridge",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_05",
+      "question": "Which magazine was started first, Arthur's Magazine or First for Women?",
+      "answer": "Arthur's Magazine",
+      "type": "comparison",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_06",
+      "question": "What is the capital of the country where the Taj Mahal is located?",
+      "answer": "New Delhi",
+      "type": "bridge",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_07",
+      "question": "Who was the president of the United States when the first transcontinental railroad was completed?",
+      "answer": "Ulysses S. Grant",
+      "type": "bridge",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_08",
+      "question": "Which film has the director born first, 'Jaws' or 'Schindler's List'?",
+      "answer": "Both were directed by Steven Spielberg",
+      "type": "comparison",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_09",
+      "question": "What year was the university founded that is home to the basketball team that won the NCAA championship in 2016?",
+      "answer": "1891",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_10",
+      "question": "In which country is the headquarters of the company that manufactures the Boeing 747?",
+      "answer": "United States",
+      "type": "bridge",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_11",
+      "question": "Who has more Grammy Awards, Beyonce or Taylor Swift?",
+      "answer": "Beyonce",
+      "type": "comparison",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_12",
+      "question": "What is the name of the river that flows through the capital city of France?",
+      "answer": "Seine",
+      "type": "single-hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_13",
+      "question": "Which country hosted the Olympics the same year that Nelson Mandela was released from prison?",
+      "answer": "No country hosted the Olympics in 1990",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_14",
+      "question": "The author of 'Harry Potter' and the author of 'The Casual Vacancy' are the same person. What is their name?",
+      "answer": "J. K. Rowling",
+      "type": "comparison",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_15",
+      "question": "What language is primarily spoken in the country where Mount Everest is located?",
+      "answer": "Nepali",
+      "type": "bridge",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_16",
+      "question": "Who was the monarch of England when Shakespeare wrote Hamlet?",
+      "answer": "Elizabeth I",
+      "type": "bridge",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_17",
+      "question": "Which is taller, the Eiffel Tower or the Leaning Tower of Pisa?",
+      "answer": "Eiffel Tower",
+      "type": "comparison",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_18",
+      "question": "What is the currency used in the country where the Great Wall is located?",
+      "answer": "Renminbi",
+      "type": "bridge",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_19",
+      "question": "Who directed the film that won the Academy Award for Best Picture in 1994?",
+      "answer": "Robert Zemeckis",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_20",
+      "question": "Is the population of Tokyo greater than that of New York City?",
+      "answer": "Yes",
+      "type": "comparison",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_21",
+      "question": "What element has the atomic number that is the square root of 144?",
+      "answer": "Magnesium",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_22",
+      "question": "What is the longest river in the continent where Kenya is located?",
+      "answer": "Nile",
+      "type": "single-hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": "hpqa_23",
+      "question": "Which planet in our solar system has the most moons?",
+      "answer": "Saturn",
+      "type": "single-hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": "hpqa_24",
+      "question": "Who painted the ceiling of the Sistine Chapel, and in what city is it located?",
+      "answer": "Michelangelo, Vatican City",
+      "type": "bridge",
+      "difficulty": "hard"
+    },
+    {
+      "id": "hpqa_25",
+      "question": "Which is heavier, a mole of gold or a mole of silver?",
+      "answer": "A mole of gold",
+      "type": "comparison",
+      "difficulty": "hard"
+    }
+  ]
+}

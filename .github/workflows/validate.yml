@@ -1,0 +1,280 @@
+name: Validate Agent Ontology
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate-specs:
+    name: Validate YAML Specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Validate all specs
+        run: python -m agent_ontology.validate --all agent_ontology/specs/
+
+  lint-specs:
+    name: Lint YAML Specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Lint all specs
+        run: python -m agent_ontology.lint --all agent_ontology/specs/ --severity warn
+
+  syntax-check-agents:
+    name: Syntax Check Agent Modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with all extras
+        run: pip install -e ".[all]"
+
+      - name: Syntax check custom backend agents
+        run: |
+          failed=0
+          for f in agents/*.py; do
+            module=$(basename "$f" .py)
+            echo "Checking agents.${module} ..."
+            if ! python -c "import agents.${module}"; then
+              echo "FAIL: agents.${module}"
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "One or more custom agent modules failed to import."
+            exit 1
+          fi
+          echo "All custom agent modules passed syntax check."
+
+      - name: Syntax check LangGraph agents
+        run: |
+          failed=0
+          for f in agents_lg/*.py; do
+            module=$(basename "$f" .py)
+            echo "Checking agents_lg.${module} ..."
+            if ! python -c "import agents_lg.${module}"; then
+              echo "FAIL: agents_lg.${module}"
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "One or more LangGraph agent modules failed to import."
+            exit 1
+          fi
+          echo "All LangGraph agent modules passed syntax check."
+
+  property-tests:
+    name: Property-Based Structural Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with all extras
+        # test_properties.py imports pytest; the [all] extra does not include it.
+        run: pip install -e ".[all]" && pip install pytest
+
+      - name: Run property tests
+        run: python tests/test_properties.py
+
+  pytest-suite:
+    name: Pytest Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with all extras
+        # tests/ needs pytest (not in the [all] extra) and llm_client: the
+        # live-viewer runner refuses to execute without it by design, so six
+        # runner tests fail with "llm_client.call_llm unavailable" if it is
+        # absent. Every other job already installs it; this one did not.
+        run: |
+          pip install -e ".[all]"
+          pip install pytest "llm-client>=0.6.0"
+
+      - name: Run pytest
+        run: python -m pytest tests/ -q
+
+  live-e2e-review:
+    name: Live E2E Review CLI
+    runs-on: ubuntu-latest
+    # `vars` IS available in a job-level `if:` (unlike `secrets`), so this gate
+    # makes the job show as SKIPPED rather than reporting success having done
+    # nothing. CI installs `llm-client` from PyPI and gets a module without
+    # call_llm, which the runtime under test refuses to run without. Set the
+    # repository variable LLM_CLIENT_AVAILABLE=true once CI can reach the real
+    # package, and these jobs light up.
+    if: vars.LLM_CLIENT_AVAILABLE == 'true'
+    needs: [validate-specs, lint-specs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + judge client
+        run: |
+          pip install -e .
+          pip install "llm-client>=0.6.0"
+
+      - name: Run backend E2E review (deterministic gate)
+        run: |
+          ao-live-e2e-fixtures \
+            --fixtures agent_ontology/benchmarks/live_e2e_fixtures.json \
+            --only-id codex_write_file_deterministic \
+            --no-judge-default \
+            --json-out .live_runs/ci_latest_e2e_fixture_pack_deterministic.json
+
+      - name: Upload deterministic E2E review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-live-e2e-fixtures-deterministic
+          path: .live_runs/ci_latest_e2e_fixture_pack_deterministic.json
+          if-no-files-found: warn
+
+  live-e2e-review-external-deterministic:
+    name: Live E2E Review External Deterministic
+    runs-on: ubuntu-latest
+    # `vars` IS available in a job-level `if:` (unlike `secrets`), so this gate
+    # makes the job show as SKIPPED rather than reporting success having done
+    # nothing. CI installs `llm-client` from PyPI and gets a module without
+    # call_llm, which the runtime under test refuses to run without. Set the
+    # repository variable LLM_CLIENT_AVAILABLE=true once CI can reach the real
+    # package, and these jobs light up.
+    if: vars.LLM_CLIENT_AVAILABLE == 'true'
+    needs: [validate-specs, lint-specs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + judge client
+        run: |
+          pip install -e .
+          pip install "llm-client>=0.6.0"
+
+      - name: Run backend E2E review (external deterministic fixture lane)
+        run: |
+          ao-live-e2e-fixtures \
+            --fixtures agent_ontology/benchmarks/live_e2e_fixtures.json \
+            --tag external \
+            --no-judge-default \
+            --json-out .live_runs/ci_latest_e2e_review_external_deterministic.json
+
+      - name: Upload external deterministic E2E review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-live-e2e-review-external-deterministic
+          path: .live_runs/ci_latest_e2e_review_external_deterministic.json
+          if-no-files-found: warn
+
+  live-e2e-review-strict-judged:
+    name: Live E2E Review Strict + Judged
+    runs-on: ubuntu-latest
+    # `vars` IS available in a job-level `if:` (unlike `secrets`), so this gate
+    # makes the job show as SKIPPED rather than reporting success having done
+    # nothing. CI installs `llm-client` from PyPI and gets a module without
+    # call_llm, which the runtime under test refuses to run without. Set the
+    # repository variable LLM_CLIENT_AVAILABLE=true once CI can reach the real
+    # package, and these jobs light up.
+    if: vars.LLM_CLIENT_AVAILABLE == 'true'
+    needs: [live-e2e-review, live-e2e-review-external-deterministic]
+    # The `secrets` context is not available in a job-level `if:`; using it there
+    # makes the whole workflow file unparseable. Expose the secret as job-level
+    # env instead and guard the step, which `env` *is* visible to.
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + judge client
+        run: |
+          pip install -e .
+          pip install "llm-client>=0.6.0"
+
+      - name: Run backend E2E review (strict judged gate)
+        if: env.OPENROUTER_API_KEY != ''
+        run: |
+          ao-live-e2e-review \
+            --spec-path agent_ontology/specs/codex.yaml \
+            --text "Use write_file to create artifact.txt containing exactly: done\nThen finish." \
+            --mock-mode deterministic \
+            --capability-profile restricted \
+            --review-profile babyagi_strict \
+            --judge-model openrouter/deepseek/deepseek-chat \
+            --timeout-seconds 180 \
+            --json-out .live_runs/ci_latest_e2e_review_strict_judged.json
+
+      - name: Upload strict judged E2E review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-live-e2e-review-strict-judged
+          path: .live_runs/ci_latest_e2e_review_strict_judged.json
+          if-no-files-found: warn
+
+  smoke-test:
+    name: Smoke Test (ReAct + Self-Refine)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    # A step's own `env:` block is not visible to that step's `if:`, so the
+    # previous step-level guard was always false and both smoke tests silently
+    # skipped while the job reported success. Job-level env fixes that.
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    needs: [validate-specs, lint-specs, syntax-check-agents, property-tests, pytest-suite, live-e2e-review, live-e2e-review-external-deterministic]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with agent extras
+        run: pip install -e ".[agents]"
+
+      - name: Run smoke test (ReAct)
+        if: env.GEMINI_API_KEY != ''
+        run: python tests/test_agents.py --agent react --timeout 60
+
+      - name: Run smoke test (Self-Refine)
+        if: env.GEMINI_API_KEY != ''
+        run: python tests/test_agents.py --agent self_refine --timeout 60

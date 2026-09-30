@@ -1,0 +1,183 @@
+{
+  "name": "GSM8K",
+  "description": "Grade school math word problems (25 curated examples)",
+  "source": "GSM8K (Cobbe et al., 2021)",
+  "scoring": ["em"],
+  "examples": [
+    {
+      "id": "gsm_01",
+      "question": "Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells every duck egg at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+      "answer": 18,
+      "steps": 2,
+      "solution": "16 - 3 - 4 = 9 eggs sold. 9 * 2 = $18."
+    },
+    {
+      "id": "gsm_02",
+      "question": "A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take?",
+      "answer": 3,
+      "steps": 1,
+      "solution": "2 / 2 = 1 bolt white. 2 + 1 = 3 total."
+    },
+    {
+      "id": "gsm_03",
+      "question": "Josh decides to try flipping a house. He buys a house for $80,000 and then puts in $50,000 in repairs. This increased the value of the house by 150%. How much profit did he make?",
+      "answer": 70000,
+      "steps": 3,
+      "solution": "Cost = 80000 + 50000 = 130000. Value increase = 80000 * 1.5 = 120000. New value = 80000 + 120000 = 200000. Profit = 200000 - 130000 = 70000."
+    },
+    {
+      "id": "gsm_04",
+      "question": "Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. If each chicken eats 3 cups of feed per day, how many cups of feed does she need to give her chickens in the final meal of the day?",
+      "answer": 20,
+      "steps": 3,
+      "solution": "Morning + afternoon = 15 + 25 = 40 cups. Total chickens = (unknown from per-meal, but let n = chickens). 3n = total feed. Actually: total feed given so far = 40. Total needed = 3n. Need to find n from morning: ... Simpler: total per day = 3 * (15+25+x)/3... Let's use: if 15+25=40 given, and she has 20 chickens (15+25+x = 60, x=20). Each chicken eats 3 cups total = 60 cups for 20 chickens. 60 - 40 = 20."
+    },
+    {
+      "id": "gsm_05",
+      "question": "Kylar went to the store to get his 2 gallons of milk but realized the price had risen by $2. If a gallon of milk now costs $5, how much does Kylar need to pay?",
+      "answer": 10,
+      "steps": 1,
+      "solution": "2 * 5 = $10."
+    },
+    {
+      "id": "gsm_06",
+      "question": "Toulouse has twice as many sheep as Charleston. Charleston has 4 times as many sheep as Seattle. If Seattle has 20 sheep, how many sheep do Toulouse, Charleston, and Seattle have together?",
+      "answer": 260,
+      "steps": 3,
+      "solution": "Seattle = 20. Charleston = 4 * 20 = 80. Toulouse = 2 * 80 = 160. Total = 20 + 80 + 160 = 260."
+    },
+    {
+      "id": "gsm_07",
+      "question": "Carla is downloading a 200 GB file. Normally she can download 2 GB per minute, but 40% of the way through the download, Windows forces a restart to install updates. If it takes 20 minutes to install the updates and then restart, and the download has to start over from the beginning, how long does it take to download the file?",
+      "answer": 160,
+      "steps": 4,
+      "solution": "First download gets to 40%: 200 * 0.4 = 80 GB. Time = 80 / 2 = 40 min. Restart: 20 min. Second download: 200 / 2 = 100 min. Total = 40 + 20 + 100 = 160 min."
+    },
+    {
+      "id": "gsm_08",
+      "question": "John takes a pill every 6 hours. How many pills does he take in a week?",
+      "answer": 28,
+      "steps": 2,
+      "solution": "24 / 6 = 4 pills per day. 4 * 7 = 28 pills per week."
+    },
+    {
+      "id": "gsm_09",
+      "question": "A merchant wants to make a choice of purchase between 2 purchase plans: jewelry worth $5,000 or electronic gadgets worth $8,000. His financial advisor advises him to invest in jewelry. If he follows his advice, after 2 years he will get a profit of 2.5% of the value of his investment. But if he invests in gadgets he will get a profit of 5% of the value. How much profit would he lose if he follows his advisor's advice?",
+      "answer": 275,
+      "steps": 3,
+      "solution": "Jewelry profit = 5000 * 0.025 = 125. Gadget profit = 8000 * 0.05 = 400. Loss = 400 - 125 = 275."
+    },
+    {
+      "id": "gsm_10",
+      "question": "Two trains leave San Rafael at the same time. They begin traveling westward, both bound for San Francisco. The first train is traveling at a speed of 50 miles per hour. The second train is traveling at a speed of 70 miles per hour. After how many minutes will the second train be 10 miles ahead of the first train?",
+      "answer": 30,
+      "steps": 2,
+      "solution": "Relative speed = 70 - 50 = 20 mph. Time to gain 10 miles = 10/20 = 0.5 hours = 30 minutes."
+    },
+    {
+      "id": "gsm_11",
+      "question": "Jill gets paid $20 per hour to teach and $30 per hour as a personal trainer. She teaches for 5 hours each day and trains for 3 hours each day. If she works 6 days a week, how much does she make in a week?",
+      "answer": 1140,
+      "steps": 3,
+      "solution": "Teaching per day = 20 * 5 = 100. Training per day = 30 * 3 = 90. Per day total = 190. Per week = 190 * 6 = 1140."
+    },
+    {
+      "id": "gsm_12",
+      "question": "Claire makes a 3 egg omelet every morning for breakfast. How many dozens of eggs will she need to buy to make omelets for 4 weeks?",
+      "answer": 7,
+      "steps": 2,
+      "solution": "Total eggs = 3 * 28 = 84. Dozens = 84 / 12 = 7."
+    },
+    {
+      "id": "gsm_13",
+      "question": "A library has 120 books. 40% are fiction and the rest are non-fiction. If 15 new fiction books and 10 new non-fiction books are added, how many fiction books are there now?",
+      "answer": 63,
+      "steps": 2,
+      "solution": "Original fiction = 120 * 0.4 = 48. After adding = 48 + 15 = 63."
+    },
+    {
+      "id": "gsm_14",
+      "question": "Sam has 12 apples. He gives 4 to his sister and buys 8 more. Then he shares the apples equally among himself and 3 friends. How many apples does each person get?",
+      "answer": 4,
+      "steps": 3,
+      "solution": "After giving away: 12 - 4 = 8. After buying: 8 + 8 = 16. Shared among 4 people: 16 / 4 = 4."
+    },
+    {
+      "id": "gsm_15",
+      "question": "A store sells notebooks for $3 each and pens for $1.50 each. Maria buys 4 notebooks and 6 pens. How much does she spend in total?",
+      "answer": 21,
+      "steps": 2,
+      "solution": "Notebooks: 4 * 3 = 12. Pens: 6 * 1.5 = 9. Total: 12 + 9 = 21."
+    },
+    {
+      "id": "gsm_16",
+      "question": "A farmer has 3 fields. The first field produces 200 bushels of corn, the second produces 350 bushels, and the third produces 450 bushels. If he sells corn at $4 per bushel, how much revenue does he earn?",
+      "answer": 4000,
+      "steps": 2,
+      "solution": "Total bushels = 200 + 350 + 450 = 1000. Revenue = 1000 * 4 = 4000."
+    },
+    {
+      "id": "gsm_17",
+      "question": "A car travels 60 miles in the first hour, 80 miles in the second hour, and 70 miles in the third hour. What is the car's average speed in miles per hour?",
+      "answer": 70,
+      "steps": 2,
+      "solution": "Total distance = 60 + 80 + 70 = 210. Total time = 3 hours. Average speed = 210/3 = 70."
+    },
+    {
+      "id": "gsm_18",
+      "question": "Tom has $50. He buys 3 shirts at $8 each and 2 pairs of socks at $3 each. How much money does he have left?",
+      "answer": 20,
+      "steps": 3,
+      "solution": "Shirts: 3 * 8 = 24. Socks: 2 * 3 = 6. Total spent: 24 + 6 = 30. Remaining: 50 - 30 = 20."
+    },
+    {
+      "id": "gsm_19",
+      "question": "A rectangle has a length of 12 cm and a width of 8 cm. If the length is increased by 25% and the width is decreased by 25%, what is the area of the new rectangle in square centimeters?",
+      "answer": 90,
+      "steps": 3,
+      "solution": "New length = 12 * 1.25 = 15. New width = 8 * 0.75 = 6. Area = 15 * 6 = 90."
+    },
+    {
+      "id": "gsm_20",
+      "question": "A water tank can hold 500 liters. It is currently 30% full. How many liters of water need to be added to fill the tank completely?",
+      "answer": 350,
+      "steps": 2,
+      "solution": "Current water = 500 * 0.3 = 150. Need to add = 500 - 150 = 350."
+    },
+    {
+      "id": "gsm_21",
+      "question": "Sophia has 3 times as many stickers as Emma. Emma has 5 more stickers than Olivia. If Olivia has 7 stickers, how many stickers does Sophia have?",
+      "answer": 36,
+      "steps": 2,
+      "solution": "Emma = 7 + 5 = 12. Sophia = 3 * 12 = 36."
+    },
+    {
+      "id": "gsm_22",
+      "question": "A baker makes 60 cookies per batch. He needs cookies for 5 parties, with 40 guests at each party. If each guest gets 2 cookies, how many batches does the baker need to make?",
+      "answer": 7,
+      "steps": 3,
+      "solution": "Total guests = 5 * 40 = 200. Total cookies = 200 * 2 = 400. Batches = 400 / 60 = 6.67, rounds up to 7."
+    },
+    {
+      "id": "gsm_23",
+      "question": "A train travels at 90 km/h for 2.5 hours, then at 60 km/h for 1.5 hours. What is the total distance traveled in kilometers?",
+      "answer": 315,
+      "steps": 2,
+      "solution": "First leg: 90 * 2.5 = 225. Second leg: 60 * 1.5 = 90. Total = 225 + 90 = 315."
+    },
+    {
+      "id": "gsm_24",
+      "question": "In a school, there are 480 students. 60% of the students are in the science club. Of those in the science club, 25% are also in the math club. How many students are in both clubs?",
+      "answer": 72,
+      "steps": 2,
+      "solution": "Science club = 480 * 0.6 = 288. Both clubs = 288 * 0.25 = 72."
+    },
+    {
+      "id": "gsm_25",
+      "question": "A pool is being filled by two pipes. Pipe A fills 3 gallons per minute and Pipe B fills 5 gallons per minute. If the pool holds 480 gallons, how many minutes will it take to fill the pool with both pipes running?",
+      "answer": 60,
+      "steps": 2,
+      "solution": "Combined rate = 3 + 5 = 8 gallons per minute. Time = 480 / 8 = 60 minutes."
+    }
+  ]
+}

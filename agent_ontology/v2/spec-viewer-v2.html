@@ -1,0 +1,2073 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Ontology Live Viewer v2</title>
+  <style>
+    :root {
+      --bg: #0a0f16;
+      --panel: #101927;
+      --panel-2: #0f1722;
+      --border: #223247;
+      --text: #d8e7f6;
+      --muted: #8aa3bb;
+      --accent: #4ea1ff;
+      --ok: #5fd29a;
+      --warn: #f0c267;
+      --err: #ff8f8f;
+      --sans: "IBM Plex Sans", "Segoe UI", Roboto, system-ui, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --explorer-w: 380px;
+      --inspect-w: 380px;
+      --chat-h: 260px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: var(--sans);
+      background: radial-gradient(1300px 850px at 18% -20%, #18314c 0%, var(--bg) 42%), var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    body.simple-mode {
+      --inspect-w: 340px;
+      --chat-h: 220px;
+    }
+
+    .advanced-only { display: block; }
+    body.simple-mode .advanced-only { display: none !important; }
+
+    #app {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr);
+      gap: 8px;
+      height: 100vh;
+      padding: 8px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0 12px;
+      background: linear-gradient(180deg, rgba(20,28,40,0.95), rgba(11,18,27,0.95));
+    }
+
+    .title {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+    .title .sub { color: var(--muted); font-weight: 500; }
+
+    .top-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chip {
+      border: 1px solid #2a3a50;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      color: var(--muted);
+      background: rgba(10, 15, 23, 0.92);
+    }
+    .chip.running { color: var(--ok); border-color: rgba(95,210,154,0.4); }
+    .chip.error { color: var(--err); border-color: rgba(255,143,143,0.45); }
+
+    .btn {
+      border: 1px solid #2a3a50;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: #bfd2e4;
+      background: #152234;
+    }
+    .btn:hover { border-color: #3e5d84; }
+    .btn.primary {
+      color: #eaf4ff;
+      border-color: rgba(78,161,255,0.72);
+      background: rgba(78,161,255,0.2);
+    }
+    .btn.err {
+      color: var(--err);
+      border-color: rgba(255,143,143,0.48);
+      background: rgba(255,143,143,0.1);
+    }
+
+    #workspace {
+      display: grid;
+      grid-template-columns: var(--explorer-w) 6px minmax(0, 1fr) var(--inspect-w);
+      gap: 8px;
+      min-height: 0;
+    }
+
+    body.explorer-hidden #workspace {
+      grid-template-columns: 0 0 minmax(0, 1fr) var(--inspect-w);
+      gap: 8px;
+    }
+    body.explorer-hidden #explorer-panel,
+    body.explorer-hidden #explorer-resizer { display: none; }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      min-height: 0;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(16,24,36,0.93), rgba(12,19,29,0.95));
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      background: rgba(10, 15, 23, 0.9);
+    }
+
+    .panel-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+    }
+
+    #explorer-resizer {
+      width: 6px;
+      cursor: col-resize;
+      border: 1px solid rgba(34, 50, 71, 0.7);
+      border-radius: 6px;
+      background: linear-gradient(180deg, rgba(23, 35, 52, 0.95), rgba(15, 23, 36, 0.95));
+    }
+
+    #center-col {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) var(--chat-h);
+      gap: 8px;
+    }
+
+    .explorer-session {
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(10, 15, 24, 0.86);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .explorer-nav {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 6px;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(10, 15, 24, 0.78);
+    }
+
+    .section-btn {
+      border: 1px solid #2a3a50;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: #b5c8da;
+      background: #152235;
+      cursor: pointer;
+    }
+    .section-btn.active {
+      color: #e8f3ff;
+      border-color: rgba(78,161,255,0.72);
+      background: rgba(78,161,255,0.2);
+    }
+
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .row {
+      border: 1px solid #25364b;
+      border-radius: 8px;
+      background: rgba(13, 20, 31, 0.88);
+      padding: 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .row:hover { border-color: #355d86; }
+    .row.active { border-color: rgba(78,161,255,0.8); box-shadow: inset 0 0 0 1px rgba(78,161,255,0.35); }
+
+    .meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 4px;
+      word-break: break-word;
+    }
+
+    .runtime-lenses {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .lens-btn {
+      border: 1px solid #2a3a50;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: #b5c8da;
+      background: #152235;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+    }
+    .lens-btn.active {
+      color: #e8f3ff;
+      border-color: rgba(78,161,255,0.72);
+      background: rgba(78,161,255,0.2);
+    }
+
+    .center-mode-toggle {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .center-mode-btn {
+      border: 1px solid #2a3a50;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: #b5c8da;
+      background: #152235;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+    }
+    .center-mode-btn.active {
+      color: #e8f3ff;
+      border-color: rgba(78,161,255,0.72);
+      background: rgba(78,161,255,0.2);
+    }
+
+    #runtime-canvas {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      cursor: grab;
+      padding: 8px;
+    }
+    #runtime-canvas.panning { cursor: grabbing; }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .table th, .table td {
+      border-bottom: 1px solid #233348;
+      text-align: left;
+      padding: 6px;
+      vertical-align: top;
+    }
+    .table th { color: var(--muted); font-weight: 600; font-family: var(--sans); }
+    .table tr.active td { background: rgba(78,161,255,0.13); }
+
+    .graph-wrap {
+      min-width: 900px;
+      min-height: 500px;
+      padding: 8px;
+    }
+    .graph-svg {
+      width: 100%;
+      height: auto;
+      min-height: 560px;
+      border: 1px solid #223247;
+      border-radius: 8px;
+      background: rgba(10, 15, 24, 0.72);
+      user-select: none;
+    }
+
+    .node rect {
+      fill: rgba(20, 33, 50, 0.96);
+      stroke: #35608c;
+      stroke-width: 1.4;
+      rx: 8;
+      ry: 8;
+    }
+    .node.active rect {
+      fill: rgba(78,161,255,0.25);
+      stroke: #7bb9ff;
+      stroke-width: 1.8;
+    }
+    .node text {
+      fill: #dce9f8;
+      font-size: 11px;
+      font-family: var(--mono);
+      pointer-events: none;
+    }
+
+    .edge {
+      stroke: #4f7398;
+      stroke-width: 1.4;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+    .edge-label {
+      fill: #97afc6;
+      font-size: 10px;
+      font-family: var(--mono);
+    }
+
+    .files-mode {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 8px;
+      height: 100%;
+      min-height: 0;
+    }
+    .file-mode-controls {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 2px;
+    }
+    .file-tabs {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 2px;
+    }
+    .file-tab {
+      border: 1px solid #2a3a50;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: #b8cbe0;
+      background: #152235;
+      cursor: pointer;
+      max-width: 280px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-tab.active {
+      color: #e8f3ff;
+      border-color: rgba(78,161,255,0.72);
+      background: rgba(78,161,255,0.2);
+    }
+    .file-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      min-height: 0;
+      height: 100%;
+    }
+    .file-pane {
+      border: 1px solid #24364a;
+      border-radius: 8px;
+      background: rgba(10, 15, 24, 0.9);
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .file-pane-head {
+      border-bottom: 1px solid #24364a;
+      padding: 6px 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--sans);
+    }
+    .file-pane-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 6px;
+    }
+
+    .chat-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      gap: 8px;
+      min-height: 0;
+      padding: 8px;
+    }
+
+    #chat-transcript,
+    #inspector-raw,
+    #file-render,
+    #memory-render {
+      border: 1px solid #23374c;
+      border-radius: 8px;
+      background: rgba(10, 15, 24, 0.92);
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #chat-transcript {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .msg {
+      border: 1px solid #263a51;
+      border-radius: 8px;
+      padding: 8px;
+      background: rgba(13, 20, 31, 0.9);
+    }
+    .msg.user { border-color: rgba(78,161,255,0.5); }
+    .msg.assistant { border-color: rgba(95,210,154,0.42); }
+    .msg .role {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+      font-family: var(--sans);
+    }
+
+    .chat-controls {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .input,
+    .select,
+    .textarea {
+      width: 100%;
+      border: 1px solid #2a3b51;
+      border-radius: 6px;
+      background: #111a27;
+      color: var(--text);
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: var(--sans);
+    }
+
+    .textarea {
+      resize: none;
+      min-height: 96px;
+      font-family: var(--mono);
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .small { color: var(--muted); font-size: 11px; }
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+
+    .tree {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.4;
+      border: 1px solid #23374c;
+      border-radius: 8px;
+      background: rgba(10, 15, 24, 0.78);
+      padding: 6px;
+      min-height: 140px;
+    }
+    .tree details { margin-left: 12px; }
+    .tree summary {
+      cursor: pointer;
+      list-style: none;
+      color: #a7bfd6;
+    }
+    .tree summary::-webkit-details-marker { display: none; }
+    .tree-file {
+      margin-left: 20px;
+      cursor: pointer;
+      color: #d3e3f3;
+      padding: 2px 3px;
+      border-radius: 4px;
+    }
+    .tree-file.active { background: rgba(78,161,255,0.18); color: #ecf5ff; }
+
+    #file-render table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    #file-render td {
+      border-bottom: 1px solid #1d2c3f;
+      vertical-align: top;
+      padding: 0 0 0 8px;
+    }
+    #file-render td.ln {
+      width: 56px;
+      color: #6f869f;
+      padding-right: 8px;
+      text-align: right;
+      user-select: none;
+      border-right: 1px solid #203145;
+    }
+
+    @media (max-width: 1500px) {
+      :root { --explorer-w: 340px; --inspect-w: 340px; }
+      .chat-grid { grid-template-columns: 1fr 340px; }
+    }
+
+    @media (max-width: 1200px) {
+      #workspace {
+        grid-template-columns: var(--explorer-w) 6px minmax(0, 1fr);
+      }
+      #inspect-panel { display: none; }
+      .chat-grid { grid-template-columns: 1fr; }
+      .file-compare { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body class="simple-mode">
+  <div id="app">
+    <header class="topbar">
+      <div class="title">Agent Ontology <span class="sub">Live Viewer v2 (Clean Room)</span></div>
+      <div class="top-controls">
+        <span id="status-chip" class="chip">idle</span>
+        <span id="session-chip" class="chip">session: -</span>
+        <button id="ui-mode-btn" class="btn">Mode: Simple</button>
+        <button id="toggle-explorer-btn" class="btn">Hide Explorer</button>
+      </div>
+    </header>
+
+    <div id="workspace">
+      <aside id="explorer-panel" class="panel">
+        <div class="panel-head">
+          <span>Explorer</span>
+          <div style="display:flex; gap:6px;">
+            <button id="new-chat-btn" class="btn">New Chat</button>
+            <button id="refresh-btn" class="btn">Refresh</button>
+          </div>
+        </div>
+
+        <div class="explorer-session">
+          <div class="small" id="explorer-meta">No active session</div>
+          <div class="small" id="run-meta">No active run</div>
+        </div>
+
+        <div class="explorer-nav">
+          <button class="section-btn active" data-section="runs">Runs</button>
+          <button class="section-btn" data-section="files">Files</button>
+          <button class="section-btn" data-section="memory">Memory</button>
+          <button class="section-btn" data-section="views">Views</button>
+          <button class="section-btn advanced-only" data-section="settings">Settings</button>
+        </div>
+
+        <div class="panel-body" style="padding-top:0;">
+          <section class="section active" data-section="runs">
+            <div id="runs-list" class="list"></div>
+          </section>
+
+          <section class="section" data-section="files">
+            <div id="files-summary" class="small">No active run</div>
+            <div id="file-tree" class="tree" style="margin-top:8px;">No files tracked yet.</div>
+          </section>
+
+          <section class="section" data-section="memory">
+            <div id="memory-summary" class="small">No selected event</div>
+            <div id="memory-render" style="margin-top:8px;">Select an event from runtime canvas.</div>
+          </section>
+
+          <section class="section" data-section="views">
+            <div class="small">Runtime lens (all live/dynamic)</div>
+            <div class="runtime-lenses" style="margin-top:8px;">
+              <button class="lens-btn" data-lens="timeline">Timeline</button>
+              <button class="lens-btn active" data-lens="state">State</button>
+              <button class="lens-btn" data-lens="dataflow">Dataflow</button>
+              <button class="lens-btn" data-lens="sequence">Sequence</button>
+            </div>
+            <div id="views-summary" class="small" style="margin-top:10px;">No run selected.</div>
+          </section>
+
+          <section class="section advanced-only" data-section="settings">
+            <div class="grid-2">
+              <label class="field">Spec
+                <select id="spec-select" class="select"></select>
+              </label>
+              <label class="field">Model
+                <input id="model-input" class="input" value="openrouter/deepseek/deepseek-chat" />
+              </label>
+              <label class="field">Mode
+                <select id="mode-select" class="select">
+                  <option value="default">default</option>
+                  <option value="strict">strict</option>
+                </select>
+              </label>
+              <label class="field">Capabilities
+                <select id="caps-select" class="select">
+                  <option value="external_enabled">external_enabled</option>
+                  <option value="restricted">restricted</option>
+                </select>
+              </label>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <div id="explorer-resizer" aria-hidden="true"></div>
+
+      <main id="center-col">
+        <section id="runtime-panel" class="panel">
+          <div class="panel-head">
+            <span id="runtime-title">Runtime Canvas</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div class="center-mode-toggle">
+                <button class="center-mode-btn active" data-center-mode="runtime">Runtime</button>
+                <button class="center-mode-btn" data-center-mode="files">Files</button>
+              </div>
+              <span id="runtime-meta" class="small">events: 0</span>
+            </div>
+          </div>
+          <div id="runtime-canvas"></div>
+        </section>
+
+        <section id="chat-panel" class="panel">
+          <div class="panel-head">
+            <span>Chat / Run Console</span>
+            <span id="chat-hint" class="small">Ctrl/Cmd+Enter to run</span>
+          </div>
+          <div class="chat-grid">
+            <div id="chat-transcript"></div>
+            <div class="chat-controls">
+              <div class="grid-2 advanced-only">
+                <label class="field">Spec
+                  <select id="spec-select-inline" class="select"></select>
+                </label>
+                <label class="field">Model
+                  <input id="model-input-inline" class="input" value="openrouter/deepseek/deepseek-chat" />
+                </label>
+              </div>
+              <div class="small" id="prompt-meta">Prompt will be attached to current chat session.</div>
+              <label class="field">Prompt
+                <textarea id="prompt-input" class="textarea" placeholder="Type objective and click Run Live..."></textarea>
+              </label>
+              <div class="actions">
+                <button id="stop-btn" class="btn err" disabled>Stop</button>
+                <button id="run-btn" class="btn primary">Run Live</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside id="inspect-panel" class="panel">
+        <div class="panel-head">
+          <span id="inspect-kind">Inspector</span>
+          <span id="inspect-summary" class="small">Select an event or file.</span>
+        </div>
+        <div class="panel-body" style="display:flex; flex-direction:column; gap:8px;">
+          <div class="small">File Preview</div>
+          <div id="file-render">Select a file from Explorer → Files.</div>
+          <div class="small advanced-only">Raw Event / Payload</div>
+          <div id="inspector-raw" class="advanced-only">{}</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const state = {
+        uiMode: 'simple',
+        explorerHidden: false,
+        activeSection: 'runs',
+        centerMode: 'runtime',
+        centerCompare: 'previous',
+        lens: 'state',
+        activeSessionId: '',
+        sessions: [],
+        turns: [],
+        runs: [],
+        runById: {},
+        activeRunId: '',
+        activeRun: null,
+        events: [],
+        selectedEventIndex: null,
+        files: [],
+        selectedFilePath: '',
+        openFiles: [],
+        fileContent: '',
+        centerFileLeft: null,
+        centerFileRight: null,
+        eventSource: null,
+        streaming: false,
+        graphPositions: { state: {}, dataflow: {}, sequence: {} },
+        nodeEventMap: { state: {}, dataflow: {}, sequence: {} },
+      };
+
+      const el = {
+        body: document.body,
+        statusChip: document.getElementById('status-chip'),
+        sessionChip: document.getElementById('session-chip'),
+        uiModeBtn: document.getElementById('ui-mode-btn'),
+        toggleExplorerBtn: document.getElementById('toggle-explorer-btn'),
+        explorerPanel: document.getElementById('explorer-panel'),
+        explorerResizer: document.getElementById('explorer-resizer'),
+        explorerMeta: document.getElementById('explorer-meta'),
+        runMeta: document.getElementById('run-meta'),
+        refreshBtn: document.getElementById('refresh-btn'),
+        newChatBtn: document.getElementById('new-chat-btn'),
+        runsList: document.getElementById('runs-list'),
+        filesSummary: document.getElementById('files-summary'),
+        fileTree: document.getElementById('file-tree'),
+        memorySummary: document.getElementById('memory-summary'),
+        memoryRender: document.getElementById('memory-render'),
+        viewsSummary: document.getElementById('views-summary'),
+        runtimeTitle: document.getElementById('runtime-title'),
+        runtimeMeta: document.getElementById('runtime-meta'),
+        runtimeCanvas: document.getElementById('runtime-canvas'),
+        inspectKind: document.getElementById('inspect-kind'),
+        inspectSummary: document.getElementById('inspect-summary'),
+        inspectorRaw: document.getElementById('inspector-raw'),
+        fileRender: document.getElementById('file-render'),
+        chatTranscript: document.getElementById('chat-transcript'),
+        chatHint: document.getElementById('chat-hint'),
+        promptMeta: document.getElementById('prompt-meta'),
+        promptInput: document.getElementById('prompt-input'),
+        runBtn: document.getElementById('run-btn'),
+        stopBtn: document.getElementById('stop-btn'),
+        specSelect: document.getElementById('spec-select'),
+        modelInput: document.getElementById('model-input'),
+        modeSelect: document.getElementById('mode-select'),
+        capsSelect: document.getElementById('caps-select'),
+        specSelectInline: document.getElementById('spec-select-inline'),
+        modelInputInline: document.getElementById('model-input-inline'),
+      };
+
+      function esc(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+      }
+
+      function pretty(value) {
+        try { return JSON.stringify(value, null, 2); }
+        catch { return String(value); }
+      }
+
+      function setStatus(text, cls = '') {
+        el.statusChip.textContent = text;
+        el.statusChip.className = `chip${cls ? ` ${cls}` : ''}`;
+      }
+
+      async function fetchJson(url, opts = {}) {
+        const resp = await fetch(url, { cache: 'no-store', ...opts });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) {
+          throw new Error(data.error || `HTTP ${resp.status}`);
+        }
+        return data;
+      }
+
+      async function loadSpecs() {
+        const data = await fetchJson('/api/v2/specs');
+        const specs = Array.isArray(data.specs) ? data.specs : [];
+        const options = specs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+        el.specSelect.innerHTML = options;
+        el.specSelectInline.innerHTML = options;
+        const defaultSpec = String(data.default_spec || specs[0] || '');
+        if (defaultSpec) {
+          el.specSelect.value = defaultSpec;
+          el.specSelectInline.value = defaultSpec;
+        }
+      }
+
+      function syncSettings(direction = 'main-to-inline') {
+        if (direction === 'main-to-inline') {
+          el.specSelectInline.value = el.specSelect.value;
+          el.modelInputInline.value = el.modelInput.value;
+          return;
+        }
+        el.specSelect.value = el.specSelectInline.value;
+        el.modelInput.value = el.modelInputInline.value;
+      }
+
+      async function newSession() {
+        const data = await fetchJson('/api/v2/session/new', { method: 'POST' });
+        state.activeSessionId = String(data.session_id || '');
+        state.turns = [];
+        el.sessionChip.textContent = `session: ${state.activeSessionId || '-'}`;
+        await refreshSession();
+      }
+
+      async function refreshSession() {
+        if (!state.activeSessionId) return;
+        const data = await fetchJson(`/api/v2/session/${encodeURIComponent(state.activeSessionId)}`);
+        state.turns = Array.isArray(data.turns) ? data.turns : [];
+        renderChat();
+        el.explorerMeta.textContent = `session ${state.activeSessionId} • turns ${state.turns.length}`;
+      }
+
+      async function loadRuns({ selectLatest = false, sessionScoped = true } = {}) {
+        const sessionQ = sessionScoped && state.activeSessionId
+          ? `&session_id=${encodeURIComponent(state.activeSessionId)}`
+          : '';
+        let data = await fetchJson(`/api/v2/runs?limit=180${sessionQ}`);
+        if (!Array.isArray(data.runs) || (!data.runs.length && sessionScoped)) {
+          data = await fetchJson('/api/v2/runs?limit=180');
+        }
+        state.runs = Array.isArray(data.runs) ? data.runs : [];
+        state.runById = Object.fromEntries(state.runs.map((r) => [String(r.run_id), r]));
+
+        if (selectLatest && state.runs.length) {
+          state.activeRunId = String(state.runs[0].run_id || '');
+        } else if (!state.activeRunId && state.runs.length) {
+          state.activeRunId = String(state.runs[0].run_id || '');
+        } else if (state.activeRunId && !state.runById[state.activeRunId]) {
+          state.activeRunId = state.runs.length ? String(state.runs[0].run_id || '') : '';
+        }
+
+        renderRuns();
+
+        if (state.activeRunId) {
+          await loadRun(state.activeRunId, { attachStream: false });
+        } else {
+          state.events = [];
+          state.files = [];
+          state.selectedEventIndex = null;
+          state.selectedFilePath = '';
+          state.fileContent = '';
+          renderRuntime();
+          renderFiles();
+          renderMemory();
+          renderInspector();
+        }
+      }
+
+      function renderRuns() {
+        if (!state.runs.length) {
+          el.runsList.innerHTML = '<div class="small">No runs found.</div>';
+          return;
+        }
+        el.runsList.innerHTML = state.runs.map((run) => {
+          const rid = String(run.run_id || '');
+          const active = rid === state.activeRunId ? ' active' : '';
+          const status = String(run.status || 'unknown');
+          const cls = status === 'running' ? 'ok' : (status === 'error' ? 'err' : '');
+          const objective = esc(String(run.objective || '(no objective)')).slice(0, 190);
+          return (
+            `<div class="row${active}" data-run-id="${esc(rid)}">` +
+              `<div><strong>${esc(rid)}</strong> <span class="${cls}">${esc(status)}</span></div>` +
+              `<div class="meta">events=${Number(run.event_count || 0)} latest=${Number(run.latest_event_index || 0)}</div>` +
+              `<div class="meta">${objective}</div>` +
+            `</div>`
+          );
+        }).join('');
+        el.runsList.querySelectorAll('[data-run-id]').forEach((node) => {
+          node.addEventListener('click', async () => {
+            const rid = String(node.getAttribute('data-run-id') || '').trim();
+            if (!rid) return;
+            await loadRun(rid, { attachStream: false });
+          });
+        });
+      }
+
+      async function loadRun(runId, { attachStream = false } = {}) {
+        const rid = String(runId || '').trim();
+        if (!rid) return;
+
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+
+        state.activeRunId = rid;
+        state.activeRun = state.runById[rid] || null;
+        const data = await fetchJson(`/api/v2/events/${encodeURIComponent(rid)}?limit=20000`);
+        state.events = Array.isArray(data.events) ? data.events : [];
+
+        if (state.events.length) {
+          state.selectedEventIndex = Number(state.events[state.events.length - 1].event_index || null);
+        } else {
+          state.selectedEventIndex = null;
+        }
+
+        const runSessionId = String((state.activeRun && state.activeRun.session_id) || '');
+        if (runSessionId && runSessionId !== state.activeSessionId) {
+          state.activeSessionId = runSessionId;
+          el.sessionChip.textContent = `session: ${state.activeSessionId}`;
+          await refreshSession();
+        }
+
+        await loadFiles();
+        renderRuns();
+        renderRuntime();
+        renderMemory();
+        renderInspector();
+        renderMeta();
+
+        if (attachStream) {
+          attachStream(rid);
+        }
+
+        if (state.activeRun && String(state.activeRun.status) === 'running') {
+          attachStream(rid);
+        }
+      }
+
+      function renderMeta() {
+        const runId = state.activeRunId || '-';
+        const evtCount = state.events.length;
+        const latest = evtCount ? Number(state.events[evtCount - 1].event_index || 0) : 0;
+        el.runtimeMeta.textContent = `mode: ${state.centerMode} • events: ${evtCount} • latest: ${latest} • lens: ${state.lens}`;
+        el.viewsSummary.textContent = state.activeRunId
+          ? `run ${state.activeRunId} • lens ${state.lens} • events ${evtCount}`
+          : 'No run selected.';
+        el.runMeta.textContent = state.activeRunId
+          ? `run ${state.activeRunId} • selected event ${state.selectedEventIndex ?? 'n/a'}`
+          : 'No active run';
+        el.promptMeta.textContent = state.activeSessionId
+          ? `Prompt attached to session ${state.activeSessionId}`
+          : 'Prompt will create a new session';
+      }
+
+      async function loadFiles() {
+        if (!state.activeRunId) {
+          state.files = [];
+          renderFiles();
+          return;
+        }
+        const data = await fetchJson(`/api/v2/files/${encodeURIComponent(state.activeRunId)}`);
+        state.files = Array.isArray(data.files) ? data.files : [];
+        if (!state.selectedFilePath && state.files.length) {
+          state.selectedFilePath = String(state.files[0].path || '');
+          await openFile(state.selectedFilePath, { quiet: true });
+        }
+        renderFiles();
+      }
+
+      function buildTree(paths) {
+        const root = { name: '', type: 'dir', children: new Map() };
+        for (const rawPath of paths) {
+          const path = String(rawPath || '').trim();
+          if (!path) continue;
+          const parts = path.split('/').filter(Boolean);
+          let node = root;
+          for (let i = 0; i < parts.length; i += 1) {
+            const part = parts[i];
+            const isFile = i === parts.length - 1;
+            if (!node.children.has(part)) {
+              node.children.set(part, { name: part, type: isFile ? 'file' : 'dir', children: new Map(), path: isFile ? path : '' });
+            }
+            node = node.children.get(part);
+            if (isFile) {
+              node.type = 'file';
+              node.path = path;
+            }
+          }
+        }
+        return root;
+      }
+
+      function renderTreeNode(node) {
+        if (node.type === 'file') {
+          const active = node.path === state.selectedFilePath ? ' active' : '';
+          return `<div class="tree-file${active}" data-file-path="${esc(node.path)}">${esc(node.name)}</div>`;
+        }
+        const children = Array.from(node.children.values())
+          .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1)))
+          .map(renderTreeNode)
+          .join('');
+        const open = node.name ? ' open' : '';
+        if (!node.name) return children;
+        return `<details${open}><summary>${esc(node.name)}</summary>${children}</details>`;
+      }
+
+      function renderFiles() {
+        el.filesSummary.textContent = state.activeRunId
+          ? `${state.files.length} files • run ${state.activeRunId}`
+          : 'No active run';
+        if (!state.files.length) {
+          el.fileTree.textContent = 'No tracked files yet.';
+          return;
+        }
+        const paths = state.files.map((f) => String(f.path || '')).filter(Boolean);
+        const tree = buildTree(paths);
+        el.fileTree.innerHTML = renderTreeNode(tree);
+        el.fileTree.querySelectorAll('[data-file-path]').forEach((node) => {
+          node.addEventListener('click', async () => {
+            const path = String(node.getAttribute('data-file-path') || '');
+            await openFile(path);
+          });
+        });
+      }
+
+      function renderCode(content) {
+        const text = String(content || '');
+        const lines = text.split('\n');
+        const rows = lines.map((line, i) => {
+          return `<tr><td class="ln">${i + 1}</td><td><pre style="margin:0; white-space:pre-wrap;">${esc(line || ' ')}</pre></td></tr>`;
+        }).join('');
+        return `<table>${rows}</table>`;
+      }
+
+      function fileInfo(path) {
+        return state.files.find((row) => String(row.path || '') === String(path || '')) || null;
+      }
+
+      function fileEventIndexes(path) {
+        const info = fileInfo(path);
+        if (!info || !Array.isArray(info.event_indexes)) return [];
+        return info.event_indexes
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n >= 0)
+          .sort((a, b) => a - b);
+      }
+
+      function atOrBefore(indices, target) {
+        if (!indices.length) return null;
+        let pick = null;
+        for (const idx of indices) {
+          if (idx <= target) pick = idx;
+          else break;
+        }
+        return pick;
+      }
+
+      function previousIndex(indices, current) {
+        if (!indices.length || current == null) return null;
+        let prev = null;
+        for (const idx of indices) {
+          if (idx < current) prev = idx;
+          if (idx >= current) break;
+        }
+        return prev;
+      }
+
+      async function fetchFileVersion(path, { source = 'snapshot', atEventIndex = null } = {}) {
+        if (!state.activeRunId) return { ok: false, error: 'No active run', path, source };
+        const parts = [
+          `/api/v2/file/${encodeURIComponent(state.activeRunId)}?path=${encodeURIComponent(path)}`,
+          `source=${encodeURIComponent(source)}`,
+        ];
+        if (Number.isFinite(atEventIndex)) {
+          parts.push(`at_event_index=${Number(atEventIndex)}`);
+        }
+        const url = parts.join('&');
+        try {
+          const payload = await fetchJson(url);
+          return { ok: true, ...payload };
+        } catch (err) {
+          return { ok: false, error: String(err.message || err), path, source };
+        }
+      }
+
+      async function updateCenterFileViews(path) {
+        const filePath = String(path || '').trim();
+        if (!filePath) {
+          state.centerFileLeft = null;
+          state.centerFileRight = null;
+          return;
+        }
+        const cursor = Number.isFinite(state.selectedEventIndex) ? Number(state.selectedEventIndex) : null;
+        const indexes = fileEventIndexes(filePath);
+        const currentSnapshot = cursor == null
+          ? (indexes.length ? indexes[indexes.length - 1] : null)
+          : atOrBefore(indexes, cursor);
+        const prevSnapshot = previousIndex(indexes, currentSnapshot);
+
+        const left = await fetchFileVersion(filePath, { source: 'snapshot', atEventIndex: currentSnapshot });
+        const leftLabel = left.ok
+          ? `${left.source || 'snapshot'} @ ${left.snapshot_event_index ?? (currentSnapshot ?? 'latest')}`
+          : `snapshot missing @ ${currentSnapshot ?? 'latest'}`;
+        state.centerFileLeft = {
+          path: filePath,
+          label: leftLabel,
+          source: left.source || 'snapshot',
+          atEventIndex: left.snapshot_event_index ?? currentSnapshot,
+          content: left.ok ? String(left.content || '') : String(left.error || ''),
+          error: !left.ok,
+        };
+
+        let right = null;
+        if (state.centerCompare === 'workspace') {
+          right = await fetchFileVersion(filePath, { source: 'workspace' });
+        } else if (state.centerCompare === 'previous' && prevSnapshot != null) {
+          right = await fetchFileVersion(filePath, { source: 'snapshot', atEventIndex: prevSnapshot });
+        } else if (state.centerCompare === 'previous') {
+          right = await fetchFileVersion(filePath, { source: 'workspace' });
+        }
+
+        if (right) {
+          const rightLabel = right.ok
+            ? `${right.source || 'workspace'} @ ${right.snapshot_event_index ?? 'current'}`
+            : `${state.centerCompare} unavailable`;
+          state.centerFileRight = {
+            path: filePath,
+            label: rightLabel,
+            source: right.source || state.centerCompare,
+            atEventIndex: right.snapshot_event_index ?? null,
+            content: right.ok ? String(right.content || '') : String(right.error || ''),
+            error: !right.ok,
+          };
+        } else {
+          state.centerFileRight = null;
+        }
+      }
+
+      async function openFile(path, { quiet = false } = {}) {
+        const filePath = String(path || '').trim();
+        if (!filePath || !state.activeRunId) return;
+        state.selectedFilePath = filePath;
+        if (!state.openFiles.includes(filePath)) {
+          state.openFiles.push(filePath);
+          if (state.openFiles.length > 12) {
+            state.openFiles = state.openFiles.slice(-12);
+          }
+        }
+        renderFiles();
+
+        try {
+          await updateCenterFileViews(filePath);
+          const left = state.centerFileLeft;
+          const data = left && !left.error
+            ? { source: left.source, snapshot_event_index: left.atEventIndex, content: left.content }
+            : await fetchJson(`/api/v2/file/${encodeURIComponent(state.activeRunId)}?path=${encodeURIComponent(filePath)}&source=workspace`);
+          state.fileContent = String(data.content || '');
+          el.fileRender.innerHTML = renderCode(state.fileContent);
+          el.inspectKind.textContent = `File: ${filePath}`;
+          el.inspectSummary.textContent = `${data.source || 'snapshot'} @ event ${data.snapshot_event_index ?? 'current'}`;
+          el.inspectorRaw.textContent = pretty(data);
+          if (state.centerMode === 'files') {
+            renderRuntime();
+          }
+        } catch (err) {
+          if (!quiet) pushTurn('assistant', `[file-error] ${err.message}`);
+          state.fileContent = '';
+          el.fileRender.textContent = `Failed to open file: ${err.message}`;
+        }
+      }
+
+      function selectedEvent() {
+        if (!Number.isFinite(state.selectedEventIndex)) return null;
+        return state.events.find((evt) => Number(evt.event_index) === Number(state.selectedEventIndex)) || null;
+      }
+
+      function processOf(evt) {
+        if (!evt || typeof evt !== 'object') return 'unknown';
+        const payload = evt.payload && typeof evt.payload === 'object' ? evt.payload : {};
+        return String(evt.process || payload.process || evt.actor || 'unknown');
+      }
+
+      function rowClickHandler() {
+        el.runtimeCanvas.querySelectorAll('[data-evt]').forEach((tr) => {
+          tr.addEventListener('click', async () => {
+            const idx = Number(tr.getAttribute('data-evt'));
+            if (!Number.isFinite(idx)) return;
+            state.selectedEventIndex = idx;
+            renderRuntime();
+            renderMemory();
+            renderInspector();
+            if (state.selectedFilePath) {
+              await openFile(state.selectedFilePath, { quiet: true });
+            }
+          });
+        });
+      }
+
+      function buildStateGraph() {
+        const stateEvents = state.events.filter((evt) => String(evt.type || '') === 'state');
+        const nodeOrder = [];
+        const seen = new Set();
+        const edges = new Map();
+        const nodeEvent = {};
+        let prev = null;
+        for (const evt of stateEvents) {
+          const p = processOf(evt);
+          if (!seen.has(p)) {
+            seen.add(p);
+            nodeOrder.push(p);
+          }
+          nodeEvent[p] = Number(evt.event_index || 0);
+          if (prev && prev !== p) {
+            const key = `${prev}->${p}`;
+            edges.set(key, (edges.get(key) || 0) + 1);
+          }
+          prev = p;
+        }
+        const nodes = nodeOrder.map((id, i) => ({
+          id,
+          label: id,
+          x: 180 + Math.floor(i / 8) * 220,
+          y: 80 + (i % 8) * 90,
+          event_index: nodeEvent[id] || 0,
+        }));
+        const outEdges = Array.from(edges.entries()).map(([key, count]) => {
+          const [from, to] = key.split('->');
+          return { from, to, label: String(count) };
+        });
+        return { nodes, edges: outEdges, nodeEvent };
+      }
+
+      function buildDataflowGraph() {
+        const nodeEvent = {};
+        const nodeSet = new Set();
+        const edgeCounts = new Map();
+        let prev = null;
+        for (const evt of state.events) {
+          const facet = String(evt.facet || 'unknown');
+          nodeSet.add(facet);
+          nodeEvent[facet] = Number(evt.event_index || 0);
+          if (prev) {
+            const key = `${prev}->${facet}`;
+            edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+          }
+          prev = facet;
+        }
+        const nodes = Array.from(nodeSet.values()).sort().map((facet, i) => ({
+          id: facet,
+          label: facet,
+          x: 180 + (i % 5) * 220,
+          y: 90 + Math.floor(i / 5) * 120,
+          event_index: nodeEvent[facet] || 0,
+        }));
+        const edges = Array.from(edgeCounts.entries()).map(([key, count]) => {
+          const [from, to] = key.split('->');
+          return { from, to, label: String(count) };
+        });
+        return { nodes, edges, nodeEvent };
+      }
+
+      function buildSequenceGraph() {
+        const rows = state.events.slice(-120);
+        const lanes = [];
+        const laneSet = new Set();
+        for (const evt of rows) {
+          const lane = processOf(evt);
+          if (!laneSet.has(lane)) {
+            laneSet.add(lane);
+            lanes.push(lane);
+          }
+        }
+
+        const laneX = Object.fromEntries(lanes.map((lane, i) => [lane, 150 + i * 200]));
+        const nodes = [];
+        const edges = [];
+        const nodeEvent = {};
+        for (let i = 0; i < rows.length; i += 1) {
+          const evt = rows[i];
+          const lane = processOf(evt);
+          const id = `evt-${Number(evt.event_index || i)}`;
+          const x = laneX[lane] || 160;
+          const y = 80 + i * 42;
+          const idx = Number(evt.event_index || 0);
+          nodes.push({ id, label: `${idx} ${String(evt.type || 'event')}`, x, y, event_index: idx });
+          nodeEvent[id] = idx;
+          if (i > 0) {
+            const prevId = `evt-${Number(rows[i - 1].event_index || (i - 1))}`;
+            edges.push({ from: prevId, to: id, label: '' });
+          }
+        }
+
+        return { nodes, edges, nodeEvent };
+      }
+
+      function ensurePos(lens, node) {
+        const map = state.graphPositions[lens] || (state.graphPositions[lens] = {});
+        if (!map[node.id]) {
+          map[node.id] = { x: node.x, y: node.y };
+        }
+        return map[node.id];
+      }
+
+      function renderGraphLens(lens, graphData) {
+        const { nodes, edges, nodeEvent } = graphData;
+        state.nodeEventMap[lens] = nodeEvent || {};
+
+        if (!nodes.length) {
+          el.runtimeCanvas.innerHTML = `<div class="small">No ${lens} data yet.</div>`;
+          return;
+        }
+
+        const positions = nodes.map((node) => ({ ...node, ...ensurePos(lens, node) }));
+        const byId = Object.fromEntries(positions.map((n) => [n.id, n]));
+
+        let maxX = 900;
+        let maxY = 560;
+        for (const node of positions) {
+          maxX = Math.max(maxX, node.x + 180);
+          maxY = Math.max(maxY, node.y + 90);
+        }
+
+        const selected = selectedEvent();
+        const selectedIdx = Number(selected && selected.event_index || -1);
+
+        const edgeSvg = edges.map((edge) => {
+          const a = byId[edge.from];
+          const b = byId[edge.to];
+          if (!a || !b) return '';
+          const x1 = a.x + 120;
+          const y1 = a.y + 20;
+          const x2 = b.x;
+          const y2 = b.y + 20;
+          const lx = (x1 + x2) / 2;
+          const ly = (y1 + y2) / 2 - 6;
+          return (
+            `<path class="edge" d="M ${x1} ${y1} C ${x1 + 45} ${y1}, ${x2 - 45} ${y2}, ${x2} ${y2}" />` +
+            (edge.label ? `<text class="edge-label" x="${lx}" y="${ly}">${esc(edge.label)}</text>` : '')
+          );
+        }).join('');
+
+        const nodeSvg = positions.map((node) => {
+          const idx = Number(node.event_index || 0);
+          const active = idx === selectedIdx ? ' active' : '';
+          return (
+            `<g class="node${active}" data-node-id="${esc(node.id)}" data-lens="${esc(lens)}" data-evt="${idx}" transform="translate(${node.x},${node.y})">` +
+              `<rect width="120" height="40"></rect>` +
+              `<text x="8" y="16">${esc(node.label).slice(0, 28)}</text>` +
+              `<text x="8" y="31" fill="#8aa3bb">evt ${idx}</text>` +
+            `</g>`
+          );
+        }).join('');
+
+        el.runtimeCanvas.innerHTML = `
+          <div class="graph-wrap">
+            <svg class="graph-svg" viewBox="0 0 ${maxX} ${maxY}" preserveAspectRatio="xMinYMin meet">
+              <defs>
+                <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+                  <path d="M 0 0 L 8 4 L 0 8 z" fill="#4f7398"></path>
+                </marker>
+              </defs>
+              ${edgeSvg}
+              ${nodeSvg}
+            </svg>
+          </div>
+        `;
+
+        bindGraphNodeInteractions(lens);
+      }
+
+      function renderTimeline() {
+        if (!state.events.length) {
+          el.runtimeCanvas.innerHTML = '<div class="small">No events loaded.</div>';
+          return;
+        }
+        const rows = state.events.map((evt) => {
+          const idx = Number(evt.event_index || 0);
+          const active = idx === Number(state.selectedEventIndex) ? ' class="active"' : '';
+          const ts = esc(String(evt.ts || evt.time || ''));
+          const type = esc(String(evt.type || 'event'));
+          const proc = esc(processOf(evt));
+          const facet = esc(String(evt.facet || ''));
+          return `<tr data-evt="${idx}"${active}><td>${idx}</td><td>${ts}</td><td>${type}</td><td>${proc}</td><td>${facet}</td></tr>`;
+        }).join('');
+
+        el.runtimeCanvas.innerHTML = `
+          <table class="table">
+            <thead><tr><th>idx</th><th>time</th><th>type</th><th>process</th><th>facet</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+
+        rowClickHandler();
+      }
+
+      function renderCenterFilesMode() {
+        if (!state.selectedFilePath) {
+          el.runtimeCanvas.innerHTML = '<div class="small">Select a file from Explorer → Files to open file workspace mode.</div>';
+          return;
+        }
+
+        const tabs = state.openFiles.map((path) => {
+          const active = path === state.selectedFilePath ? ' active' : '';
+          return `<button class="file-tab${active}" data-open-file="${esc(path)}">${esc(path)}</button>`;
+        }).join('');
+
+        const left = state.centerFileLeft || {
+          label: 'snapshot',
+          content: 'No snapshot content loaded.',
+          error: true,
+        };
+        const right = state.centerFileRight;
+
+        const compareLabel = state.centerCompare === 'workspace' ? 'workspace' : 'previous snapshot';
+        const rightPane = right
+          ? `
+            <div class="file-pane">
+              <div class="file-pane-head">${esc(right.label || compareLabel)}</div>
+              <div class="file-pane-body">${renderCode(right.content || '')}</div>
+            </div>
+          `
+          : `
+            <div class="file-pane">
+              <div class="file-pane-head">${esc(compareLabel)}</div>
+              <div class="file-pane-body"><div class="small">No comparison content.</div></div>
+            </div>
+          `;
+
+        el.runtimeCanvas.innerHTML = `
+          <div class="files-mode">
+            <div class="file-mode-controls">
+              <button class="btn" data-file-action="snapshot">Left: Snapshot@Cursor</button>
+              <button class="btn" data-file-action="workspace">Right: Workspace</button>
+              <button class="btn" data-file-action="previous">Right: Previous Snapshot</button>
+              <button class="btn" data-file-action="refresh">Reload</button>
+              <span class="small">file: ${esc(state.selectedFilePath)} • compare: ${esc(compareLabel)}</span>
+            </div>
+            <div class="file-tabs">${tabs || '<span class="small">No open files.</span>'}</div>
+            <div class="file-compare">
+              <div class="file-pane">
+                <div class="file-pane-head">${esc(left.label || 'snapshot')}</div>
+                <div class="file-pane-body">${renderCode(left.content || '')}</div>
+              </div>
+              ${rightPane}
+            </div>
+          </div>
+        `;
+
+        el.runtimeCanvas.querySelectorAll('[data-open-file]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const path = String(btn.getAttribute('data-open-file') || '');
+            if (!path) return;
+            await openFile(path, { quiet: true });
+          });
+        });
+        el.runtimeCanvas.querySelectorAll('[data-file-action]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const action = String(btn.getAttribute('data-file-action') || '');
+            if (action === 'workspace') state.centerCompare = 'workspace';
+            if (action === 'previous') state.centerCompare = 'previous';
+            if (action === 'snapshot') state.centerCompare = 'previous';
+            await updateCenterFileViews(state.selectedFilePath);
+            renderRuntime();
+          });
+        });
+      }
+
+      function renderRuntime() {
+        if (state.centerMode === 'files') {
+          renderCenterFilesMode();
+          renderMeta();
+          return;
+        }
+
+        if (!state.activeRunId) {
+          el.runtimeCanvas.innerHTML = '<div class="small">Select a run or start a new run.</div>';
+          renderMeta();
+          return;
+        }
+
+        if (!state.events.length) {
+          el.runtimeCanvas.innerHTML = '<div class="small">No events loaded for this run.</div>';
+          renderMeta();
+          return;
+        }
+
+        if (state.lens === 'timeline') {
+          renderTimeline();
+        } else if (state.lens === 'state') {
+          renderGraphLens('state', buildStateGraph());
+        } else if (state.lens === 'dataflow') {
+          renderGraphLens('dataflow', buildDataflowGraph());
+        } else if (state.lens === 'sequence') {
+          renderGraphLens('sequence', buildSequenceGraph());
+        }
+
+        renderMeta();
+      }
+
+      function summarizeValue(value) {
+        if (value === null) return 'null';
+        if (Array.isArray(value)) return `array(${value.length})`;
+        if (typeof value === 'object') return `object(${Object.keys(value).length} keys)`;
+        if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 80)}…` : value;
+        return String(value);
+      }
+
+      function collectStoreViews(evt) {
+        const out = [];
+        const scan = (obj, base) => {
+          if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+          Object.entries(obj).forEach(([key, value]) => {
+            const path = `${base}.${key}`;
+            const lowered = key.toLowerCase();
+            const isStoreLike = lowered.includes('store') || lowered.includes('memory') || lowered.includes('context');
+            if (isStoreLike && (typeof value === 'object' || typeof value === 'string')) {
+              out.push({ path, key, value });
+            }
+          });
+        };
+        scan(evt, 'event');
+        if (evt.payload && typeof evt.payload === 'object') scan(evt.payload, 'payload');
+        if (evt.data && typeof evt.data === 'object') scan(evt.data, 'data');
+        if (evt.input && typeof evt.input === 'object') scan(evt.input, 'input');
+        return out;
+      }
+
+      function collectTextSnippets(evt) {
+        const snippets = [];
+        const visit = (value, path, depth = 0) => {
+          if (depth > 4) return;
+          if (typeof value === 'string') {
+            const text = value.trim();
+            if (text.length >= 12) {
+              snippets.push({ path, text: text.length > 220 ? `${text.slice(0, 220)}…` : text });
+            }
+            return;
+          }
+          if (!value || typeof value !== 'object') return;
+          if (Array.isArray(value)) {
+            value.slice(0, 8).forEach((row, i) => visit(row, `${path}[${i}]`, depth + 1));
+            return;
+          }
+          Object.entries(value).slice(0, 20).forEach(([k, v]) => visit(v, `${path}.${k}`, depth + 1));
+        };
+        visit(evt.payload, 'payload');
+        visit(evt.data, 'data');
+        visit(evt.input, 'input');
+        return snippets.slice(0, 18);
+      }
+
+      function renderMemory() {
+        const evt = selectedEvent();
+        if (!evt) {
+          el.memorySummary.textContent = 'No selected event';
+          el.memoryRender.textContent = 'Select an event from runtime canvas.';
+          return;
+        }
+
+        const payload = evt.payload && typeof evt.payload === 'object' ? evt.payload : {};
+        const data = evt.data && typeof evt.data === 'object' ? evt.data : {};
+        const input = evt.input && typeof evt.input === 'object' ? evt.input : {};
+        const stores = collectStoreViews(evt);
+        const snippets = collectTextSnippets(evt);
+        const sections = [];
+
+        sections.push(
+          `<div class=\"row\">` +
+            `<div><strong>Event</strong></div>` +
+            `<div class=\"meta\">index=${Number(evt.event_index || 0)} • type=${esc(String(evt.type || 'event'))} • process=${esc(processOf(evt))} • facet=${esc(String(evt.facet || ''))}</div>` +
+          `</div>`
+        );
+
+        if (stores.length) {
+          const storeRows = stores.slice(0, 16).map((entry) => {
+            return (
+              `<div class=\"row\" style=\"margin-top:6px;\">` +
+                `<div><strong>${esc(entry.key)}</strong></div>` +
+                `<div class=\"meta\">${esc(entry.path)} • ${esc(summarizeValue(entry.value))}</div>` +
+                `<pre style=\"margin:6px 0 0 0; white-space:pre-wrap;\">${esc(pretty(entry.value))}</pre>` +
+              `</div>`
+            );
+          }).join('');
+          sections.push(`<div><div class=\"small\">Store / Memory Views (${stores.length})</div>${storeRows}</div>`);
+        }
+
+        if (snippets.length) {
+          const snippetRows = snippets.map((s) => {
+            return `<div class=\"row\" style=\"margin-top:6px;\"><div><strong>${esc(s.path)}</strong></div><div class=\"meta\">${esc(s.text)}</div></div>`;
+          }).join('');
+          sections.push(`<div><div class=\"small\">Text Snippets (${snippets.length})</div>${snippetRows}</div>`);
+        }
+
+        sections.push(
+          `<div class=\"row\" style=\"margin-top:8px;\">` +
+            `<div><strong>Key Counts</strong></div>` +
+            `<div class=\"meta\">payload=${Object.keys(payload).length} • data=${Object.keys(data).length} • input=${Object.keys(input).length}</div>` +
+          `</div>`
+        );
+
+        el.memorySummary.textContent = `event ${evt.event_index} • ${evt.type}`;
+        el.memoryRender.innerHTML = sections.join('');
+      }
+
+      function renderInspector() {
+        const evt = selectedEvent();
+        if (!evt) {
+          el.inspectKind.textContent = 'Inspector';
+          el.inspectSummary.textContent = 'Select an event or file.';
+          el.inspectorRaw.textContent = '{}';
+          if (!state.fileContent) {
+            el.fileRender.textContent = 'Select a file from Explorer → Files.';
+          }
+          return;
+        }
+        el.inspectKind.textContent = `Event ${evt.event_index}`;
+        el.inspectSummary.textContent = `${evt.type} • ${processOf(evt)}`;
+        el.inspectorRaw.textContent = pretty(evt);
+      }
+
+      function renderChat() {
+        if (!state.turns.length) {
+          el.chatTranscript.innerHTML = '<div class="small">No messages yet. Enter a prompt and click Run Live.</div>';
+          return;
+        }
+        el.chatTranscript.innerHTML = state.turns.map((turn) => {
+          const role = esc(String(turn.role || 'assistant'));
+          const text = esc(String(turn.text || ''));
+          const time = new Date(String(turn.time || Date.now())).toLocaleTimeString();
+          return `
+            <div class="msg ${role}">
+              <div class="role">${role} • ${time} ${turn.run_id ? `• run ${esc(turn.run_id)}` : ''}</div>
+              <div>${text.replaceAll('\n', '<br>')}</div>
+            </div>
+          `;
+        }).join('');
+        el.chatTranscript.scrollTop = el.chatTranscript.scrollHeight;
+      }
+
+      function pushTurn(role, text, runId = '') {
+        const clean = String(text || '').trim();
+        if (!clean) return;
+        state.turns.push({ role, text: clean, time: new Date().toISOString(), run_id: runId || '' });
+        if (state.turns.length > 600) state.turns = state.turns.slice(-600);
+        renderChat();
+      }
+
+      function attachStream(runId) {
+        const rid = String(runId || '').trim();
+        if (!rid) return;
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+
+        const latest = state.events.length ? Number(state.events[state.events.length - 1].event_index || -1) : -1;
+        const url = `/api/v2/stream/${encodeURIComponent(rid)}?since_event_index=${Math.max(-1, latest)}`;
+        const es = new EventSource(url);
+        state.eventSource = es;
+        state.streaming = true;
+        setStatus(`running ${rid}`, 'running');
+        el.stopBtn.disabled = false;
+
+        es.onmessage = async (msg) => {
+          let evt = null;
+          try { evt = JSON.parse(msg.data || '{}'); } catch { return; }
+          if (!evt || typeof evt !== 'object') return;
+
+          state.events.push(evt);
+          if (state.events.length > 30000) state.events = state.events.slice(-30000);
+          state.selectedEventIndex = Number(evt.event_index || state.selectedEventIndex || 0);
+
+          renderRuntime();
+          renderMemory();
+          renderInspector();
+
+          const type = String(evt.type || '');
+          if (type === 'started') {
+            pushTurn('assistant', `Run started: ${rid}`, rid);
+            await loadFiles();
+          }
+          if (type === 'file_diff' || type === 'file_snapshot_scan' || type === 'final_data') {
+            await loadFiles();
+            if (state.selectedFilePath && state.centerMode === 'files') {
+              await openFile(state.selectedFilePath, { quiet: true });
+            }
+          }
+          if (type === 'final_channel') {
+            const payload = typeof evt.payload === 'string' ? evt.payload : pretty(evt.payload);
+            pushTurn('assistant', payload, rid);
+            await refreshSession();
+          }
+          if (type === 'completed') {
+            const code = Number(evt.returncode || 0);
+            const err = String(evt.error || '').trim();
+            pushTurn('assistant', `Run ${rid} ${code === 0 ? 'completed' : 'failed'}${err ? `\n${err}` : ''}`, rid);
+            await refreshSession();
+            await loadRuns({ selectLatest: false, sessionScoped: true });
+            await loadFiles();
+            stopStream(code === 0 ? 'idle' : 'error');
+          }
+        };
+
+        es.onerror = () => {
+          stopStream('error');
+        };
+      }
+
+      function stopStream(mode = 'idle') {
+        state.streaming = false;
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+        el.stopBtn.disabled = true;
+        if (mode === 'error') {
+          setStatus('stream disconnected', 'error');
+        } else {
+          setStatus('idle');
+        }
+      }
+
+      async function startRun() {
+        const prompt = String(el.promptInput.value || '').trim();
+        if (!prompt) {
+          el.chatHint.textContent = 'Prompt is required.';
+          return;
+        }
+
+        if (!state.activeSessionId) {
+          await newSession();
+        }
+
+        syncSettings('inline-to-main');
+        const payload = {
+          spec_path: String(el.specSelect.value || ''),
+          text: prompt,
+          user: prompt,
+          objective: prompt,
+          requested_mode: String(el.modeSelect.value || 'default'),
+          capability_profile: String(el.capsSelect.value || 'external_enabled'),
+          model_override: String(el.modelInput.value || '').trim(),
+          mock_mode: 'live',
+          session_id: state.activeSessionId,
+        };
+
+        pushTurn('user', prompt, state.activeRunId || '');
+        el.promptInput.value = '';
+        el.chatHint.textContent = 'Starting run...';
+
+        try {
+          const data = await fetchJson('/api/v2/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+
+          const rid = String(data.run_id || '');
+          if (!rid) throw new Error('Missing run_id in response');
+
+          state.activeRunId = rid;
+          await loadRuns({ selectLatest: true, sessionScoped: true });
+          await loadRun(rid, { attachStream: false });
+          attachStream(rid);
+          setStatus(`running ${rid}`, 'running');
+          el.chatHint.textContent = `Streaming run ${rid}`;
+        } catch (err) {
+          setStatus('start failed', 'error');
+          pushTurn('assistant', `[start-error] ${err.message}`);
+          el.chatHint.textContent = String(err.message || 'Failed');
+        }
+      }
+
+      async function stopRun() {
+        if (!state.activeRunId) return;
+        try {
+          await fetchJson(`/api/v2/stop/${encodeURIComponent(state.activeRunId)}`, { method: 'POST' });
+          pushTurn('assistant', `Stop requested for ${state.activeRunId}`, state.activeRunId);
+        } catch (err) {
+          pushTurn('assistant', `[stop-error] ${err.message}`);
+        }
+      }
+
+      function setSection(section) {
+        state.activeSection = section;
+        document.querySelectorAll('.section-btn').forEach((btn) => {
+          btn.classList.toggle('active', btn.getAttribute('data-section') === section);
+        });
+        document.querySelectorAll('.section').forEach((node) => {
+          node.classList.toggle('active', node.getAttribute('data-section') === section);
+        });
+        if (section === 'files') {
+          setCenterMode('files').catch(() => {});
+        } else if (section === 'views' || section === 'runs') {
+          setCenterMode('runtime').catch(() => {});
+        }
+      }
+
+      function setLens(lens) {
+        state.lens = lens;
+        document.querySelectorAll('.lens-btn').forEach((btn) => {
+          btn.classList.toggle('active', btn.getAttribute('data-lens') === lens);
+        });
+        renderRuntime();
+      }
+
+      async function setCenterMode(mode) {
+        const next = mode === 'files' ? 'files' : 'runtime';
+        state.centerMode = next;
+        document.querySelectorAll('.center-mode-btn').forEach((btn) => {
+          btn.classList.toggle('active', btn.getAttribute('data-center-mode') === next);
+        });
+        el.runtimeTitle.textContent = next === 'files' ? 'File Workspace' : 'Runtime Canvas';
+        if (next === 'files' && state.selectedFilePath) {
+          await updateCenterFileViews(state.selectedFilePath);
+        }
+        renderRuntime();
+      }
+
+      function setUiMode(mode) {
+        state.uiMode = mode;
+        el.body.classList.toggle('simple-mode', mode === 'simple');
+        el.uiModeBtn.textContent = mode === 'simple' ? 'Mode: Simple' : 'Mode: Advanced';
+        if (mode === 'simple' && state.activeSection === 'settings') {
+          setSection('runs');
+        }
+      }
+
+      function toggleExplorer() {
+        state.explorerHidden = !state.explorerHidden;
+        el.body.classList.toggle('explorer-hidden', state.explorerHidden);
+        el.toggleExplorerBtn.textContent = state.explorerHidden ? 'Show Explorer' : 'Hide Explorer';
+      }
+
+      function bindResizer() {
+        let startX = 0;
+        let startW = 0;
+        let active = false;
+
+        el.explorerResizer.addEventListener('mousedown', (ev) => {
+          active = true;
+          startX = ev.clientX;
+          startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--explorer-w'), 10) || 380;
+          ev.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (ev) => {
+          if (!active) return;
+          const delta = ev.clientX - startX;
+          const next = Math.min(620, Math.max(260, startW + delta));
+          document.documentElement.style.setProperty('--explorer-w', `${next}px`);
+        });
+
+        window.addEventListener('mouseup', () => {
+          active = false;
+        });
+      }
+
+      function bindCanvasPan() {
+        let down = false;
+        let sx = 0;
+        let sy = 0;
+        let sl = 0;
+        let st = 0;
+
+        el.runtimeCanvas.addEventListener('mousedown', (ev) => {
+          const target = ev.target;
+          const isNode = target && (target.closest && target.closest('.node'));
+          const isRow = target && (target.closest && target.closest('tr[data-evt]'));
+          if (isNode || isRow) return;
+          down = true;
+          sx = ev.clientX;
+          sy = ev.clientY;
+          sl = el.runtimeCanvas.scrollLeft;
+          st = el.runtimeCanvas.scrollTop;
+          el.runtimeCanvas.classList.add('panning');
+        });
+
+        window.addEventListener('mousemove', (ev) => {
+          if (!down) return;
+          const dx = ev.clientX - sx;
+          const dy = ev.clientY - sy;
+          el.runtimeCanvas.scrollLeft = sl - dx;
+          el.runtimeCanvas.scrollTop = st - dy;
+        });
+
+        window.addEventListener('mouseup', () => {
+          down = false;
+          el.runtimeCanvas.classList.remove('panning');
+        });
+      }
+
+      let graphDrag = null;
+
+      function bindGraphNodeInteractions(lens) {
+        el.runtimeCanvas.querySelectorAll('.node').forEach((node) => {
+          node.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const idx = Number(node.getAttribute('data-evt'));
+            if (Number.isFinite(idx) && idx > 0) {
+              state.selectedEventIndex = idx;
+              renderRuntime();
+              renderMemory();
+              renderInspector();
+              if (state.selectedFilePath) {
+                await openFile(state.selectedFilePath, { quiet: true });
+              }
+            }
+          });
+
+          node.addEventListener('mousedown', (ev) => {
+            ev.stopPropagation();
+            const id = String(node.getAttribute('data-node-id') || '');
+            const pos = state.graphPositions[lens] && state.graphPositions[lens][id];
+            if (!id || !pos) return;
+            graphDrag = { lens, id, startX: ev.clientX, startY: ev.clientY, baseX: pos.x, baseY: pos.y };
+          });
+        });
+      }
+
+      window.addEventListener('mousemove', (ev) => {
+        if (!graphDrag) return;
+        const dx = ev.clientX - graphDrag.startX;
+        const dy = ev.clientY - graphDrag.startY;
+        const map = state.graphPositions[graphDrag.lens] || (state.graphPositions[graphDrag.lens] = {});
+        map[graphDrag.id] = { x: graphDrag.baseX + dx, y: graphDrag.baseY + dy };
+        renderRuntime();
+      });
+
+      window.addEventListener('mouseup', () => {
+        graphDrag = null;
+      });
+
+      function bindActions() {
+        document.querySelectorAll('.section-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const section = String(btn.getAttribute('data-section') || 'runs');
+            setSection(section);
+          });
+        });
+
+        document.querySelectorAll('.lens-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const lens = String(btn.getAttribute('data-lens') || 'state');
+            setLens(lens);
+          });
+        });
+
+        document.querySelectorAll('.center-mode-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const mode = String(btn.getAttribute('data-center-mode') || 'runtime');
+            setCenterMode(mode).catch(() => {});
+          });
+        });
+
+        el.refreshBtn.addEventListener('click', async () => {
+          try {
+            await Promise.all([refreshSession(), loadRuns({ selectLatest: false, sessionScoped: true })]);
+            setStatus('idle');
+          } catch (err) {
+            setStatus('refresh failed', 'error');
+            pushTurn('assistant', `[refresh-error] ${err.message}`);
+          }
+        });
+
+        el.newChatBtn.addEventListener('click', async () => {
+          try {
+            if (state.eventSource) {
+              state.eventSource.close();
+              state.eventSource = null;
+            }
+            state.activeRunId = '';
+            state.events = [];
+            state.files = [];
+            state.selectedEventIndex = null;
+            state.selectedFilePath = '';
+            state.fileContent = '';
+            state.openFiles = [];
+            state.centerFileLeft = null;
+            state.centerFileRight = null;
+            state.centerCompare = 'previous';
+            await newSession();
+            await loadRuns({ selectLatest: false, sessionScoped: true });
+            renderRuntime();
+            renderFiles();
+            renderMemory();
+            renderInspector();
+            renderMeta();
+            setStatus('idle');
+          } catch (err) {
+            setStatus('new chat failed', 'error');
+            pushTurn('assistant', `[session-error] ${err.message}`);
+          }
+        });
+
+        el.uiModeBtn.addEventListener('click', () => {
+          setUiMode(state.uiMode === 'simple' ? 'advanced' : 'simple');
+        });
+
+        el.toggleExplorerBtn.addEventListener('click', () => {
+          toggleExplorer();
+        });
+
+        el.runBtn.addEventListener('click', () => {
+          startRun();
+        });
+
+        el.stopBtn.addEventListener('click', () => {
+          stopRun();
+        });
+
+        el.promptInput.addEventListener('keydown', (ev) => {
+          if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+            ev.preventDefault();
+            startRun();
+          }
+        });
+
+        el.specSelect.addEventListener('change', () => syncSettings('main-to-inline'));
+        el.modelInput.addEventListener('input', () => syncSettings('main-to-inline'));
+        el.specSelectInline.addEventListener('change', () => syncSettings('inline-to-main'));
+        el.modelInputInline.addEventListener('input', () => syncSettings('inline-to-main'));
+      }
+
+      async function boot() {
+        bindActions();
+        bindResizer();
+        bindCanvasPan();
+        setUiMode('simple');
+        setLens('state');
+        setSection('runs');
+        await setCenterMode('runtime');
+        setStatus('loading');
+
+        try {
+          await loadSpecs();
+          syncSettings('main-to-inline');
+          await newSession();
+          await loadRuns({ selectLatest: true, sessionScoped: true });
+          renderMeta();
+          setStatus('idle');
+        } catch (err) {
+          setStatus('boot failed', 'error');
+          pushTurn('assistant', `[boot-error] ${err.message}`);
+        }
+
+        window.setInterval(() => {
+          if (state.streaming) return;
+          loadRuns({ selectLatest: false, sessionScoped: true }).catch(() => {});
+        }, 6000);
+      }
+
+      boot();
+    })();
+  </script>
+</body>
+</html>
